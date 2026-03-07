@@ -34,8 +34,9 @@ OUTPUT FORMAT:
 You MUST respond with a valid JSON object. Do not include markdown formatting or extra text.
 {
   "verdict": "ALLOWED" | "BLOCKED",
-  "reason": "If allowed, put 'Safe'. If blocked, explain exactly what was violated.",
-  "guidance": "If allowed, put 'None'. If blocked, provide explicit instructions on how to correct the generation (e.g. 'Remove the hallucinated codebase reference', 'Do not mention the 5-Tier Memory system unless asked')."
+  "what_worked": "If blocked, state exactly what parts of the response were accurate and should be KEPT (e.g., 'The tool JSON was correct and should be preserved'). If allowed, put 'N/A'.",
+  "what_went_wrong": "If blocked, explain exactly what rule was violated. If allowed, put 'Safe'.",
+  "how_to_fix": "If blocked, provide explicit, step-by-step instructions on how to correct the generation without blindly regenerating the whole thing (e.g. 'Keep the tool call, but remove the sentence explaining the 5-Tier Memory system'). If allowed, put 'None'."
 }
 "#;
 
@@ -48,8 +49,9 @@ use std::sync::Arc;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuditResult {
     pub verdict: String,
-    pub reason: String,
-    pub guidance: String,
+    pub what_worked: String,
+    pub what_went_wrong: String,
+    pub how_to_fix: String,
 }
 
 impl AuditResult {
@@ -77,8 +79,9 @@ impl AuditResult {
                 // If it fails to parse, we "fail open" (return ALLOWED) as per ErnOS V3 safe-fail pattern
                 AuditResult {
                     verdict: "ALLOWED".to_string(),
-                    reason: "Failed to parse JSON, defaulting to safe-fail".to_string(),
-                    guidance: "".to_string(),
+                    what_worked: "N/A".to_string(),
+                    what_went_wrong: "Failed to parse JSON, defaulting to safe-fail".to_string(),
+                    how_to_fix: "None".to_string(),
                 }
             }
         }
@@ -127,8 +130,9 @@ pub async fn run_skeptic_audit(
             eprintln!("Observer LLM Error: {:?}", e);
             AuditResult {
                 verdict: "ALLOWED".to_string(),
-                reason: format!("Audit failed due to error: {}", e),
-                guidance: "None".to_string()
+                what_worked: "N/A".to_string(),
+                what_went_wrong: format!("Audit failed due to error: {}", e),
+                how_to_fix: "None".to_string()
             }
         }
     }
@@ -145,30 +149,32 @@ mod tests {
 
     #[test]
     fn test_audit_result_is_allowed() {
-        assert!(AuditResult { verdict: "ALLOWED".into(), reason: "".into(), guidance: "".into() }.is_allowed());
-        assert!(AuditResult { verdict: "PASS".into(), reason: "".into(), guidance: "".into() }.is_allowed());
-        assert!(AuditResult { verdict: "APPROVED".into(), reason: "".into(), guidance: "".into() }.is_allowed());
-        assert!(!AuditResult { verdict: "BLOCKED".into(), reason: "".into(), guidance: "".into() }.is_allowed());
+        assert!(AuditResult { verdict: "ALLOWED".into(), what_worked: "".into(), what_went_wrong: "".into(), how_to_fix: "".into() }.is_allowed());
+        assert!(AuditResult { verdict: "PASS".into(), what_worked: "".into(), what_went_wrong: "".into(), how_to_fix: "".into() }.is_allowed());
+        assert!(AuditResult { verdict: "APPROVED".into(), what_worked: "".into(), what_went_wrong: "".into(), how_to_fix: "".into() }.is_allowed());
+        assert!(!AuditResult { verdict: "BLOCKED".into(), what_worked: "".into(), what_went_wrong: "".into(), how_to_fix: "".into() }.is_allowed());
     }
 
     #[test]
     fn test_parse_verdict_clean() {
-        let raw = r#"{"verdict": "BLOCKED", "reason": "test", "guidance": "fix"}"#;
+        let raw = r#"{"verdict": "BLOCKED", "what_worked": "W", "what_went_wrong": "WW", "how_to_fix": "H"}"#;
         let res = AuditResult::parse_verdict(raw);
         assert_eq!(res.verdict, "BLOCKED");
-        assert_eq!(res.reason, "test");
+        assert_eq!(res.what_worked, "W");
+        assert_eq!(res.what_went_wrong, "WW");
+        assert_eq!(res.how_to_fix, "H");
     }
 
     #[test]
     fn test_parse_verdict_markdown() {
-        let raw = "```json\n{\"verdict\": \"BLOCKED\", \"reason\": \"M\", \"guidance\": \"M\"}\n```";
+        let raw = "```json\n{\"verdict\": \"BLOCKED\", \"what_worked\": \"W\", \"what_went_wrong\": \"WW\", \"how_to_fix\": \"H\"}\n```";
         let res = AuditResult::parse_verdict(raw);
         assert_eq!(res.verdict, "BLOCKED");
     }
 
     #[test]
     fn test_parse_verdict_markdown_no_lang() {
-        let raw = "```\n{\"verdict\": \"BLOCKED\", \"reason\": \"M\", \"guidance\": \"M\"}\n```";
+        let raw = "```\n{\"verdict\": \"BLOCKED\", \"what_worked\": \"W\", \"what_went_wrong\": \"WW\", \"how_to_fix\": \"H\"}\n```";
         let res = AuditResult::parse_verdict(raw);
         assert_eq!(res.verdict, "BLOCKED");
     }
@@ -178,7 +184,7 @@ mod tests {
         let raw = "I am an AI, I cannot output JSON.";
         let res = AuditResult::parse_verdict(raw);
         assert_eq!(res.verdict, "ALLOWED");
-        assert!(res.reason.contains("Failed to parse JSON"));
+        assert!(res.what_went_wrong.contains("Failed to parse JSON"));
     }
 
     #[tokio::test]
@@ -187,8 +193,9 @@ mod tests {
         let valid_json = r#"```json
         {
             "verdict": "ALLOWED",
-            "reason": "Safe",
-            "guidance": "None"
+            "what_worked": "N/A",
+            "what_went_wrong": "Safe",
+            "how_to_fix": "None"
         }
         ```"#;
         mock_provider.expect_generate().returning(move |_, _, _, _| Ok(valid_json.to_string()));
@@ -233,6 +240,6 @@ mod tests {
         let caps = AgentCapabilities::default();
         let res = run_skeptic_audit(Arc::new(mock_provider), &caps, "My candidate", "System", &[], &event).await;
         assert_eq!(res.verdict, "ALLOWED");
-        assert!(res.reason.contains("fail"));
+        assert!(res.what_went_wrong.contains("fail"));
     }
 }

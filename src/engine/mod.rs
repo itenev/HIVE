@@ -322,8 +322,8 @@ impl Engine {
                     final_response_text = candidate_text;
                     break;
                 } else {
-                    println!("[OBSERVER BLOCKED]: {}", audit_result.reason);
-                    extra_guidance = format!("[OBSERVER GUIDANCE - CORRECTION REQUIRED]: {}\n\n", audit_result.guidance);
+                    println!("[OBSERVER BLOCKED]\nWhat Worked: {}\nWhat Went Wrong: {}\nHow to Fix: {}", audit_result.what_worked, audit_result.what_went_wrong, audit_result.how_to_fix);
+                    extra_guidance = format!("[OBSERVER GUIDANCE - CORRECTION REQUIRED]\nWHAT WORKED: {}\nWHAT WENT WRONG: {}\nHOW TO FIX: {}\n\n", audit_result.what_worked, audit_result.what_went_wrong, audit_result.how_to_fix);
                     // Loops infinitely until the LLM complies with the Skeptic rules
                 }
             }
