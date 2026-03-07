@@ -61,28 +61,27 @@ impl AuditResult {
     }
 
     pub fn parse_verdict(raw: &str) -> Self {
-        // Strip out markdown code blocks if the model wrapped the JSON
         let mut cleaned = raw.trim();
-        if cleaned.starts_with("```json") {
-            cleaned = &cleaned[7..];
-        } else if cleaned.starts_with("```") {
-            cleaned = &cleaned[3..];
+
+        // Extract just the JSON object if the LLM leaked conversational thoughts
+        if let Some(start) = cleaned.find('{') {
+            if let Some(end) = cleaned.rfind('}') {
+                if end > start {
+                    cleaned = &cleaned[start..=end];
+                }
+            }
         }
-        if cleaned.ends_with("```") {
-            cleaned = &cleaned[..cleaned.len() - 3];
-        }
-        cleaned = cleaned.trim();
 
         // Attempt to parse JSON
         match serde_json::from_str::<AuditResult>(cleaned) {
             Ok(parsed) => parsed,
             Err(_) => {
-                // If it fails to parse, we "fail open" (return ALLOWED) as per ErnOS V3 safe-fail pattern
+                // FAIL-CLOSED: If the Observer produces invalid JSON, we must violently block the response to prevent hallucinated tool leaks from bypassing the audit.
                 AuditResult {
-                    verdict: "ALLOWED".to_string(),
+                    verdict: "BLOCKED".to_string(),
                     what_worked: "N/A".to_string(),
-                    what_went_wrong: "Failed to parse JSON, defaulting to safe-fail".to_string(),
-                    how_to_fix: "None".to_string(),
+                    what_went_wrong: format!("Observer Audit generated invalid JSON structure: {}", cleaned),
+                    how_to_fix: "The internal Observer crashed while validating your previous response, likely because your response broke the rules so severely it confused the safety parser. You MUST rewrite your answer to be strictly conversational and absolutely free of any XML, JSON, or tool instructions.".to_string(),
                 }
             }
         }
@@ -137,10 +136,10 @@ pub async fn run_skeptic_audit(
         Err(e) => {
             eprintln!("Observer LLM Error: {:?}", e);
             AuditResult {
-                verdict: "ALLOWED".to_string(),
+                verdict: "BLOCKED".to_string(),
                 what_worked: "N/A".to_string(),
-                what_went_wrong: format!("Audit failed due to error: {}", e),
-                how_to_fix: "None".to_string()
+                what_went_wrong: format!("Audit failed due to provider error or timeout: {}", e),
+                how_to_fix: "The internal LLM Observer timed out or crashed while validating your response. Please generate a shorter, simpler response without complex formatting.".to_string()
             }
         }
     }
@@ -191,8 +190,8 @@ mod tests {
     fn test_parse_verdict_fail_open() {
         let raw = "I am an AI, I cannot output JSON.";
         let res = AuditResult::parse_verdict(raw);
-        assert_eq!(res.verdict, "ALLOWED");
-        assert!(res.what_went_wrong.contains("Failed to parse JSON"));
+        assert_eq!(res.verdict, "BLOCKED");
+        assert!(res.what_went_wrong.contains("Observer Audit generated invalid JSON structure"));
     }
 
     #[tokio::test]
@@ -247,7 +246,7 @@ mod tests {
 
         let caps = AgentCapabilities::default();
         let res = run_skeptic_audit(Arc::new(mock_provider), &caps, "My candidate", "System", &[], &event, "").await;
-        assert_eq!(res.verdict, "ALLOWED");
+        assert_eq!(res.verdict, "BLOCKED");
         assert!(res.what_went_wrong.contains("fail"));
     }
 }
