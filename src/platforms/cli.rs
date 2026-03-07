@@ -45,13 +45,14 @@ impl Platform for CliPlatform {
                 let (scope, content) = if line.starts_with("/dm ") {
                     (Scope::Private { user_id: "local_admin".to_string() }, line.trim_start_matches("/dm ").to_string())
                 } else {
-                    (Scope::Public, line.clone())
+                    (Scope::Public { channel_id: "cli_local".into(), user_id: "local_admin".into() }, line.clone())
                 };
 
                 let event = Event {
                     platform: "cli".to_string(),
                     scope,
                     author_name: "Admin".to_string(),
+                    author_id: "local_admin".to_string(),
                     content,
                 };
 
@@ -67,7 +68,7 @@ impl Platform for CliPlatform {
 
     async fn send(&self, response: Response) -> Result<(), PlatformError> {
         match response.target_scope {
-            Scope::Public => {
+            Scope::Public { .. } => {
                 println!("[\x1b[36mApis (Public)\x1b[0m] {}", response.text);
             }
             Scope::Private { user_id } => {
@@ -98,7 +99,7 @@ mod tests {
         let cli = CliPlatform::new(cursor);
         let res = Response {
             platform: "cli".to_string(),
-            target_scope: Scope::Public,
+            target_scope: Scope::Public { channel_id: "cli".into(), user_id: "tester".into() },
             text: "Public test".to_string(),
             is_telemetry: false,
         };
@@ -129,7 +130,7 @@ mod tests {
 
         let ev1 = rx.recv().await.unwrap();
         assert_eq!(ev1.content, "Hello");
-        assert!(matches!(ev1.scope, Scope::Public));
+        assert!(matches!(ev1.scope, Scope::Public { .. }));
 
         let ev2 = rx.recv().await.unwrap();
         assert_eq!(ev2.content, "Secret");

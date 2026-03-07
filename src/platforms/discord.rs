@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use tokio::sync::mpsc::Sender;
 use serenity::prelude::*;
 use serenity::model::channel::Message;
+use serenity::model::application::Interaction;
+use serenity::builder::{CreateInteractionResponse, CreateInteractionResponseMessage};
 use std::sync::Arc;
 
 use crate::models::message::{Event, Response};
@@ -16,10 +18,42 @@ struct Handler {
 #[async_trait]
 #[cfg(not(tarpaulin_include))]
 impl EventHandler for Handler {
-    async fn ready(&self, _ctx: Context, ready: serenity::model::gateway::Ready) {
+    async fn ready(&self, ctx: Context, ready: serenity::model::gateway::Ready) {
         println!("[Discord] Connected as {}", ready.user.name);
         let mut id_lock = self.bot_user_id.lock().await;
         *id_lock = Some(ready.user.id);
+
+        // Register Global Slash Commands
+        let command = serenity::builder::CreateCommand::new("clean")
+            .description("ADMIN ONLY: Wipes all AI Memory (Factory Reset)");
+        let _ = serenity::model::application::Command::create_global_command(&ctx.http, command).await;
+    }
+
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        if let Interaction::Command(command) = interaction {
+            if command.data.name.as_str() == "clean" {
+                // Instantly reply so the Discord interaction doesn't fail
+                let data = CreateInteractionResponseMessage::new()
+                    .content("```\n⏳ Initiating Factory Wipe...\n```")
+                    .ephemeral(true); // Only the admin sees this
+                let builder = CreateInteractionResponse::Message(data);
+                if let Err(why) = command.create_response(&ctx.http, builder).await {
+                    eprintln!("Cannot respond to slash command: {why}");
+                }
+
+                // Push a special hidden command to the core engine.
+                // It comes attached to the exact Admin's Discord UID so the Engine RBAC matches it.
+                let ev = Event {
+                    platform: format!("discord_interaction:{}", command.channel_id.get()),
+                    scope: Scope::Public { channel_id: command.channel_id.get().to_string(), user_id: command.user.id.get().to_string() }, 
+                    author_name: command.user.name.clone(),
+                    author_id: command.user.id.get().to_string(),
+                    content: "/clean".to_string(), // The hardcoded command the Engine looks for
+                };
+
+                let _ = self.event_sender.send(ev).await;
+            }
+        }
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
@@ -54,7 +88,7 @@ impl EventHandler for Handler {
         let scope = if is_dm {
             Scope::Private { user_id: msg.author.id.get().to_string() }
         } else {
-            Scope::Public
+            Scope::Public { channel_id: msg.channel_id.get().to_string(), user_id: msg.author.id.get().to_string() }
         };
 
         // Create cognition tracker embed (ErnOS CognitionTracker pattern)
@@ -76,6 +110,7 @@ impl EventHandler for Handler {
             platform: platform_id,
             scope,
             author_name: msg.author.name.clone(),
+            author_id: msg.author.id.get().to_string(),
             content: msg.content.clone(),
         };
 
@@ -158,10 +193,19 @@ impl Platform for DiscordPlatform {
                     .edit_message(http, serenity::model::id::MessageId::new(thinking_msg_id), edit_builder)
                     .await;
             }
+            
+            // Also trigger the native typing indicator
+            let _ = channel.broadcast_typing(http).await;
         } else {
-            // FINAL RESPONSE: Send the actual reply as a new message
-            let builder = serenity::builder::CreateMessage::new().content(response.text);
-            let _ = channel.send_message(http, builder).await;
+            // Check if this is responding to a slash command "discord_interaction" platform ID
+            if response.platform.starts_with("discord_interaction:") {
+                let builder = serenity::builder::CreateMessage::new().content(response.text);
+                let _ = channel.send_message(http, builder).await;
+            } else {
+                // FINAL RESPONSE: Send the actual reply as a new message
+                let builder = serenity::builder::CreateMessage::new().content(response.text);
+                let _ = channel.send_message(http, builder).await;
+            }
         }
 
         Ok(())
@@ -187,7 +231,7 @@ mod tests {
         let discord = DiscordPlatform::new("".to_string());
         let res = Response {
             platform: "discord".to_string(),
-            target_scope: Scope::Public,
+            target_scope: Scope::Public { channel_id: "123".to_string(), user_id: "user".to_string() },
             text: "Public test".to_string(),
             is_telemetry: false,
         };
@@ -200,7 +244,7 @@ mod tests {
         let discord = DiscordPlatform::new("".to_string());
         let res = Response {
             platform: "discord:1234:5678".to_string(),
-            target_scope: Scope::Public,
+            target_scope: Scope::Public { channel_id: "123".to_string(), user_id: "user".to_string() },
             text: "Public test".to_string(),
             is_telemetry: false,
         };

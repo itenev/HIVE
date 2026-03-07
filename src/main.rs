@@ -4,11 +4,14 @@ mod engine;
 mod memory;
 mod models;
 mod platforms;
+pub mod prompts;
 mod providers;
+pub mod swarm;
 
 use std::sync::Arc;
 use tokio::io::AsyncBufRead;
 use crate::engine::EngineBuilder;
+use crate::models::capabilities::AgentCapabilities;
 use crate::platforms::discord::DiscordPlatform;
 use crate::platforms::cli::CliPlatform;
 use crate::providers::ollama::OllamaProvider;
@@ -32,11 +35,32 @@ pub async fn run_app() {
 
     let discord_token = std::env::var("DISCORD_TOKEN").unwrap_or_default();
 
+    let capabilities = AgentCapabilities {
+        admin_users: vec![
+            "1299810741984956449".into(), // metta_mazza
+            "1282286389953695745".into(), // afreakyfrog
+            "local_admin".into(),         // CLI access
+        ],
+        has_terminal_access: true,
+        has_internet_access: true,
+        admin_tools: vec![
+            "run_bash_command".into(),
+            "write_file".into(),
+            "delete_file".into(),
+        ],
+        default_tools: vec![
+            "read_file".into(),
+            "list_dir".into(),
+            "grep_search".into(),
+        ],
+    };
+
     // Build the engine with our defined platforms
     let engine = EngineBuilder::new()
         .with_platform(Box::new(DiscordPlatform::new(discord_token)))
         .with_platform(Box::new(CliPlatform::new(reader)))
         .with_provider(Arc::new(OllamaProvider::new()))
+        .with_capabilities(capabilities)
         .build()
         .expect("Failed to build Engine");
 

@@ -3,11 +3,14 @@ use serde::{Deserialize, Serialize};
 /// Defines the security scope of an event or memory context.
 /// 
 /// A primary tenet of the HIVE system is strict data segregation.
-/// - `Public`: Broadly accessible data (e.g. general Discord Channels).
+/// - `Public`: Broadly accessible data (e.g. general Discord Channels), siloed strictly by `channel_id` + `user_id`.
 /// - `Private`: Data tied exclusively to a specific User's identity (e.g. Direct Messages).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Scope {
-    Public,
+    Public {
+        channel_id: String,
+        user_id: String,
+    },
     /// A secure 1-to-1 context for a specific user ID.
     Private {
         user_id: String,
@@ -19,15 +22,19 @@ impl Scope {
     /// to read data that is tagged with the `target` scope.
     ///
     /// Rules:
-    /// - `Public` scope can ONLY read `Public` data.
-    /// - `Private(X)` scope can read `Public` data AND `Private(X)` data.
+    /// - `Public(C, U)` can read `Public(C, U)`.
+    /// - `Private(U)` can read `Private(U)`.
+    /// - Mismatched `Public` scopes cannot read each other (Context Siloing).
     /// - `Private(X)` CANNOT read `Private(Y)` data.
     pub fn can_read(&self, target: &Scope) -> bool {
         match (self, target) {
-            // Anyone can read public data
-            (_, Scope::Public) => true,
-            // Public scope cannot read private data
-            (Scope::Public, Scope::Private { .. }) => false,
+            // Memory Silos: Explicitly require exact channel and user match for public scopes
+            (Scope::Public { channel_id: req_c, user_id: req_u }, Scope::Public { channel_id: targ_c, user_id: targ_u }) => {
+                req_c == targ_c && req_u == targ_u
+            }
+            // Cannot cross public/private boundaries contextually
+            (Scope::Public { .. }, Scope::Private { .. }) => false,
+            (Scope::Private { .. }, Scope::Public { .. }) => false,
             // Private scope can only read its own private data
             (Scope::Private { user_id: req_id }, Scope::Private { user_id: target_id }) => {
                 req_id == target_id
@@ -42,18 +49,27 @@ mod tests {
 
     #[test]
     fn test_scope_visibility() {
-        let public = Scope::Public;
+        let pub_alice_c1 = Scope::Public { channel_id: "c1".to_string(), user_id: "alice".to_string() };
+        let pub_bob_c1 = Scope::Public { channel_id: "c1".to_string(), user_id: "bob".to_string() };
+        let pub_alice_c2 = Scope::Public { channel_id: "c2".to_string(), user_id: "alice".to_string() };
+        
         let priv_alice = Scope::Private { user_id: "alice".to_string() };
         let priv_bob = Scope::Private { user_id: "bob".to_string() };
 
-        // Public can read Public
-        assert!(public.can_read(&public));
+        // Public match
+        assert!(pub_alice_c1.can_read(&pub_alice_c1));
         
-        // Public CANNOT read Private
-        assert!(!public.can_read(&priv_alice));
+        // Public siloing blocks same channel, different user
+        assert!(!pub_alice_c1.can_read(&pub_bob_c1));
 
-        // Private can read Public
-        assert!(priv_alice.can_read(&public));
+        // Public siloing blocks same user, different channel
+        assert!(!pub_alice_c1.can_read(&pub_alice_c2));
+        
+        // Public cannot read Private
+        assert!(!pub_alice_c1.can_read(&priv_alice));
+
+        // Private cannot read Public
+        assert!(!priv_alice.can_read(&pub_alice_c1));
 
         // Private can read own Private
         assert!(priv_alice.can_read(&priv_alice));

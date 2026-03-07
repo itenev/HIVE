@@ -125,11 +125,10 @@ impl Provider for OllamaProvider {
 
                         let mut telemetry_token = String::new();
                         
-                        // Qwen3.5 nests thinking inside the message object!
+                        // Qwen3.5 uses 'thinking' key or '<think>' tags.
+                        // For pure JSON 'thinking' key:
                         if let Some(thinking) = msg.get("thinking").and_then(|v| v.as_str()) {
                             telemetry_token.push_str(thinking);
-                        } else if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
-                            telemetry_token.push_str(content);
                         }
                         
                         if let Some(ref tx) = telemetry_tx {
@@ -148,7 +147,19 @@ impl Provider for OllamaProvider {
             }
         }
 
-        Ok(full_response)
+        // Qwen models sometimes return the <think> block inside the final content string.
+        // We need to strip it out so it doesn't double-print to the user.
+        let mut final_answer = full_response;
+        if let Some(start_idx) = final_answer.find("<think>") {
+            if let Some(end_idx) = final_answer.find("</think>") {
+                if end_idx > start_idx {
+                    // Remove everything from <think> to </think> + length of </think>
+                    final_answer.replace_range(start_idx..end_idx + 8, "");
+                }
+            }
+        }
+        
+        Ok(final_answer.trim().to_string())
     }
 }
 
@@ -175,17 +186,19 @@ mod tests {
             .await;
 
         let history = vec![
-            Event { platform: "cli".into(), scope: Scope::Public, author_name: "Apis".into(), content: "I am here.".into() },
-            Event { platform: "cli".into(), scope: Scope::Public, author_name: "Alice".into(), content: "Hi!".into() },
+            Event { platform: "cli".into(), scope: Scope::Public { channel_id: "t".into(), user_id: "t".into() }, author_name: "Apis".into(), author_id: "test".into(), content: "I am here.".into() },
+            Event { platform: "cli".into(), scope: Scope::Public { channel_id: "t".into(), user_id: "t".into() }, author_name: "Alice".into(), author_id: "test".into(), content: "Hi!".into() },
         ];
         
         // Single JSON response is technically a 1-line stream chunk
-        let res = provider.generate("sys", &history, &Event {
+        let new_event = Event {
             platform: "cli".into(),
-            scope: Scope::Public,
+            scope: Scope::Public { channel_id: "t".into(), user_id: "t".into() },
             author_name: "Bob".into(),
+            author_id: "test".into(),
             content: "What's up?".into(),
-        }, None).await.unwrap();
+        };
+        let res = provider.generate("sys", &history, &new_event, None).await.unwrap();
 
         assert_eq!(res, "Sure, here's your context.");
     }
@@ -205,8 +218,9 @@ mod tests {
 
         let res = provider.generate("sys", &[], &Event {
             platform: "cli".into(),
-            scope: Scope::Public,
+            scope: Scope::Public { channel_id: "t".into(), user_id: "t".into() },
             author_name: "Bob".into(),
+            author_id: "test".into(),
             content: "Bork?".into(),
         }, None).await;
 
@@ -220,8 +234,9 @@ mod tests {
 
         let res = provider.generate("sys", &[], &Event {
             platform: "cli".into(),
-            scope: Scope::Public,
+            scope: Scope::Public { channel_id: "t".into(), user_id: "t".into() },
             author_name: "Bob".into(),
+            author_id: "test".into(),
             content: "Bork?".into(),
         }, None).await;
 
@@ -242,8 +257,9 @@ mod tests {
 
         let res = provider.generate("sys", &[], &Event {
             platform: "cli".into(),
-            scope: Scope::Public,
+            scope: Scope::Public { channel_id: "t".into(), user_id: "t".into() },
             author_name: "Bob".into(),
+            author_id: "test".into(),
             content: "Bork?".into(),
         }, None).await;
 
@@ -265,8 +281,9 @@ mod tests {
         // No chunks, natural EOF. 
         let res = provider.generate("sys", &[], &Event {
             platform: "cli".into(),
-            scope: Scope::Public,
+            scope: Scope::Public { channel_id: "t".into(), user_id: "t".into() },
             author_name: "Bob".into(),
+            author_id: "test".into(),
             content: "Bork?".into(),
         }, None).await;
 
@@ -279,7 +296,8 @@ mod tests {
         let mut provider = OllamaProvider::new();
         provider.endpoint = format!("{}/api/chat", mock_server.uri());
 
-        let mock_response = "{\"message\": {\"role\": \"assistant\", \"thinking\": \"I am thinking...\"}, \"done\": true}\n";
+        // Simulate Qwen3.5 style where both thinking and content can stream
+        let mock_response = "{\"message\": {\"role\": \"assistant\", \"thinking\": \"I am thinking...\", \"content\": \"Final answer\"}, \"done\": true}\n";
 
         Mock::given(method("POST"))
             .and(path("/api/chat"))
@@ -291,12 +309,13 @@ mod tests {
         
         let res = provider.generate("sys", &[], &Event {
             platform: "cli".into(),
-            scope: Scope::Public,
+            scope: Scope::Public { channel_id: "t".into(), user_id: "t".into() },
             author_name: "Bob".into(),
+            author_id: "test".into(),
             content: "Bork?".into(),
         }, Some(tx)).await;
 
-        assert_eq!(res.unwrap(), ""); // content was empty
+        assert_eq!(res.unwrap(), "Final answer"); 
         assert_eq!(rx.recv().await.unwrap(), "I am thinking...");
     }
 
@@ -316,8 +335,9 @@ mod tests {
 
         let res = provider.generate("sys", &[], &Event {
             platform: "cli".into(),
-            scope: Scope::Public,
+            scope: Scope::Public { channel_id: "t".into(), user_id: "t".into() },
             author_name: "Bob".into(),
+            author_id: "test".into(),
             content: "Bork?".into(),
         }, None).await;
 

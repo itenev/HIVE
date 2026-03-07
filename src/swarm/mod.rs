@@ -1,0 +1,271 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use crate::models::drone::{DroneTemplate, DroneResult, DroneStatus};
+use crate::providers::Provider;
+use crate::memory::MemoryStore;
+use crate::models::scope::Scope;
+
+pub mod planner;
+pub mod drone;
+
+pub struct SwarmManager {
+    registry: HashMap<String, DroneTemplate>,
+    provider: Arc<dyn Provider>,
+    memory: Arc<MemoryStore>,
+}
+
+impl SwarmManager {
+    pub fn new(provider: Arc<dyn Provider>, memory: Arc<MemoryStore>) -> Self {
+        let mut registry = HashMap::new();
+        
+        // Register default built-in drones
+        let researcher = DroneTemplate {
+            name: "researcher".into(),
+            system_prompt: "You are the Researcher Drone. Your job is to analyze information, find facts, and summarize data objectively.".into(),
+            tools: vec![],
+        };
+
+        let channel_reader = DroneTemplate {
+            name: "native_channel_reader".into(),
+            system_prompt: "You natively pull the recent message history of the current channel based on the task description Target ID. You do not use LLM inference, you return the timeline JSONL block. The planner should provide the Target Entity ID in the description.".into(),
+            tools: vec![],
+        };
+
+        let codebase_list = DroneTemplate {
+            name: "native_codebase_list".into(),
+            system_prompt: "You list all files and directories recursively from the project root. You do not use LLM inference, you simply return the directory tree. The planner should output a blank description.".into(),
+            tools: vec![],
+        };
+
+        let codebase_read = DroneTemplate {
+            name: "native_codebase_read".into(),
+            system_prompt: "You are the Codebase Reader Drone. You natively read the contents of a specific file in the HIVE codebase. The planner must put EXACTLY the relative file path (e.g. src/engine/mod.rs) in the description.".into(),
+            tools: vec![],
+        };
+
+        registry.insert(researcher.name.clone(), researcher);
+        registry.insert(channel_reader.name.clone(), channel_reader);
+        registry.insert(codebase_list.name.clone(), codebase_list);
+        registry.insert(codebase_read.name.clone(), codebase_read);
+
+        Self {
+            registry,
+            provider,
+            memory,
+        }
+    }
+
+    pub fn register_drone(&mut self, template: DroneTemplate) {
+        self.registry.insert(template.name.clone(), template);
+    }
+
+    pub fn get_template(&self, name: &str) -> Option<DroneTemplate> {
+        self.registry.get(name).cloned()
+    }
+
+    /// Fetches all registered drones formatted as a string for the Queen Planner prompt
+    pub fn get_available_drones_text(&self) -> String {
+        let mut out = String::new();
+        for (name, template) in &self.registry {
+            out.push_str(&format!("- DRONE `{}`: {}\n", name, template.system_prompt));
+        }
+        out
+    }
+
+    /// Executes a swarm plan by spawning all tasks concurrently.
+    /// In a fully robust graph, we would respect `depends_on`. For now, we fan out in parallel.
+    pub async fn execute_plan(&self, plan: crate::swarm::planner::SwarmPlan, context: &str) -> Vec<DroneResult> {
+        let mut futures = vec![];
+
+        for task in plan.tasks {
+            // Intercept Native Drones
+            if task.drone_type == "native_channel_reader" {
+                let mem_clone = self.memory.clone();
+                let task_id = task.task_id.clone();
+                let desc = task.description.clone(); // E.g., tells which Scope or channel ID
+                
+                // For now, we assume the planner task description contains the target scope string
+                // But generally the planner executes on the current Context Event anyway.
+                // We'll parse the description or just default read the timeline logic.
+                
+                let handle = tokio::spawn(async move {
+                    // Extract channel_id if possible, or we could just pass `Event` down the SwarmManager tree.
+                    // To keep it simple, we'll try to extract a channel_id from the description (e.g. "Read channel: 1234")
+                    // If none, we fallback to a standard error.
+                    let mut output = String::new();
+                    let parts: Vec<&str> = desc.split_whitespace().collect();
+                    let target_id = parts.last().unwrap_or(&"").to_string();
+                    
+                    let pub_scope = Scope::Public { channel_id: target_id.clone(), user_id: "system".into() };
+                    if let Ok(timeline_data) = mem_clone.timeline.read_timeline(&pub_scope).await {
+                        output = String::from_utf8_lossy(&timeline_data).to_string();
+                    } else {
+                        output = "Failed to read timeline for channel.".to_string();
+                    }
+                    
+                    DroneResult {
+                        task_id,
+                        output,
+                        tokens_used: 0,
+                        status: DroneStatus::Success,
+                    }
+                });
+                futures.push(handle);
+                continue;
+            } else if task.drone_type == "native_codebase_list" {
+                let task_id = task.task_id.clone();
+                let handle = tokio::spawn(async move {
+                    // Quick recursive list, we'll shell out to `find` for simplicity or use standard local traversal.
+                    // Returning a hardcoded string or running a quick command is easiest since we know linux/mac.
+                    // For pure rust, we'll try std::process::Command
+                    let output = match std::process::Command::new("find").arg("src").arg("-type").arg("f").output() {
+                        Ok(res) => String::from_utf8_lossy(&res.stdout).to_string(),
+                        Err(e) => format!("Failed to list codebase: {}", e),
+                    };
+                    DroneResult {
+                        task_id,
+                        output,
+                        tokens_used: 0,
+                        status: DroneStatus::Success,
+                    }
+                });
+                futures.push(handle);
+                continue;
+            } else if task.drone_type == "native_codebase_read" {
+                let task_id = task.task_id.clone();
+                let desc = task.description.clone();
+                let handle = tokio::spawn(async move {
+                    // Extract the path from the end of the description
+                    let parts: Vec<&str> = desc.split_whitespace().collect();
+                    let target_path = parts.last().unwrap_or(&"").to_string();
+                    
+                    // Basic sanity check to prevent arbitrary file reading outside cwd
+                    let output = if target_path.contains("..") || target_path.starts_with('/') {
+                        "Access Denied: Path traverses outside isolated project root.".to_string()
+                    } else if let Ok(content) = tokio::fs::read_to_string(&target_path).await {
+                        format!("--- FILE: {} ---\n{}", target_path, content)
+                    } else {
+                        format!("Failed to read file: {}", target_path)
+                    };
+
+                    DroneResult {
+                        task_id,
+                        output,
+                        tokens_used: 0,
+                        status: DroneStatus::Success,
+                    }
+                });
+                futures.push(handle);
+                continue;
+            }
+
+            if let Some(template) = self.get_template(&task.drone_type) {
+                let context_clone = context.to_string();
+                let provider_clone = self.provider.clone();
+                let task_id = task.task_id.clone();
+                let desc = task.description.clone();
+
+                let handle = tokio::spawn(async move {
+                    let executor = drone::DroneExecutor::new(provider_clone, template);
+                    executor.execute(&task_id, &desc, &context_clone).await
+                });
+
+                futures.push(handle);
+            } else {
+                // Return immediate failure if drone doesn't exist
+                futures.push(tokio::spawn(async move {
+                    DroneResult {
+                        task_id: task.task_id.clone(),
+                        output: String::new(),
+                        tokens_used: 0,
+                        status: DroneStatus::Failed(format!("Drone type '{}' not found", task.drone_type)),
+                    }
+                }));
+            }
+        }
+
+        let mut results = vec![];
+        for f in futures {
+            if let Ok(res) = f.await {
+                results.push(res);
+            }
+        }
+        results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::MockProvider;
+    use crate::models::drone::DroneStatus;
+
+    #[tokio::test]
+    async fn test_swarm_manager_registration() {
+        let provider = Arc::new(MockProvider::new());
+        let memory = Arc::new(MemoryStore::default());
+        let mut swarm = SwarmManager::new(provider, memory);
+        
+        let template = DroneTemplate {
+            name: "test_drone".into(),
+            system_prompt: "sys".into(),
+            tools: vec![],
+        };
+        
+        swarm.register_drone(template.clone());
+        assert!(swarm.get_template("test_drone").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_swarm_execute_plan_success() {
+        let mut mock_provider = MockProvider::new();
+        mock_provider
+            .expect_generate()
+            .returning(|_, _, _, _| Ok("Drone output".to_string()));
+
+        let memory = Arc::new(MemoryStore::default());
+        let swarm = SwarmManager::new(Arc::new(mock_provider), memory);
+        
+        let plan = crate::swarm::planner::SwarmPlan {
+            tasks: vec![
+                crate::swarm::planner::SwarmTask {
+                    task_id: "1".into(),
+                    drone_type: "researcher".into(),
+                    description: "do research".into(),
+                    depends_on: vec![],
+                }
+            ],
+        };
+
+        let results = swarm.execute_plan(plan, "User said hello").await;
+        
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].task_id, "1");
+        assert_eq!(results[0].output, "Drone output");
+        assert_eq!(results[0].status, DroneStatus::Success);
+    }
+
+    #[tokio::test]
+    async fn test_swarm_execute_plan_drone_not_found() {
+        let mock_provider = MockProvider::new();
+        let memory = Arc::new(MemoryStore::default());
+        let swarm = SwarmManager::new(Arc::new(mock_provider), memory);
+        
+        let plan = crate::swarm::planner::SwarmPlan {
+            tasks: vec![
+                crate::swarm::planner::SwarmTask {
+                    task_id: "2".into(),
+                    drone_type: "missing_drone".into(),
+                    description: "fail".into(),
+                    depends_on: vec![],
+                }
+            ],
+        };
+
+        let results = swarm.execute_plan(plan, "Context").await;
+        
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].task_id, "2");
+        assert!(matches!(results[0].status, DroneStatus::Failed(_)));
+    }
+}

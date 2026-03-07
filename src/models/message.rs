@@ -10,6 +10,7 @@ pub struct Event {
     pub platform: String,
     pub scope: Scope,
     pub author_name: String,
+    pub author_id: String,
     pub content: String,
     // (Optional) ID for threads/channels if necessary, can add later
 }

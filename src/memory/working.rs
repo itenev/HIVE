@@ -1,0 +1,313 @@
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use std::path::PathBuf;
+use tokio::fs::{self, OpenOptions};
+use tokio::io::AsyncWriteExt;
+
+use crate::models::message::Event;
+use crate::models::scope::Scope;
+
+/// Tier 1: Working Memory
+/// Represents the immediate, persistent cross-session context.
+/// Tracks token count to trigger autosaves when approaching the context window limit.
+#[derive(Debug, Clone)]
+pub struct WorkingMemory {
+    events: Arc<RwLock<Vec<Event>>>,
+    // The current estimated token count of the active transcript
+    token_count: Arc<RwLock<usize>>,
+    // The maximum token limit before triggering Autosave
+    max_tokens: usize,
+    base_dir: PathBuf,
+}
+
+impl Default for WorkingMemory {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl WorkingMemory {
+    pub fn new(base_dir: Option<PathBuf>) -> Self {
+        Self {
+            events: Arc::new(RwLock::new(Vec::new())),
+            token_count: Arc::new(RwLock::new(0)),
+            max_tokens: 256_000, // 256K token limit
+            base_dir: base_dir.unwrap_or_else(|| PathBuf::from("memory")),
+        }
+    }
+
+    /// Gets the base directory for memory storage
+    pub fn get_memory_dir(&self) -> PathBuf {
+        self.base_dir.clone()
+    }
+
+    /// Gets the specific transcript file path for a scope
+    fn get_transcript_path(&self, scope: &Scope) -> PathBuf {
+        let mut path = self.get_memory_dir();
+        match scope {
+            Scope::Public { channel_id, .. } => path.push(format!("public_{}", channel_id)),
+            Scope::Private { user_id } => path.push(format!("private_{}", user_id)),
+        }
+        path.push("transcript.jsonl");
+        path
+    }
+
+    pub async fn add_event(&self, event: Event) {
+        // 1. Update in-memory state
+        let mut w = self.events.write().await;
+        w.push(event.clone());
+        
+        // 2. Track estimated tokens (char count / 4 is a standard rough heuristic)
+        let estimated_tokens = event.content.len() / 4;
+        let mut tc = self.token_count.write().await;
+        *tc += estimated_tokens;
+        
+        // 3. Persist to disk
+        let path = self.get_transcript_path(&event.scope);
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent).await;
+        }
+        
+        if let Ok(json) = serde_json::to_string(&event) {
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .await 
+            {
+                let _ = file.write_all(format!("{}\n", json).as_bytes()).await;
+            }
+        }
+    }
+
+    pub async fn get_history(&self, requesting_scope: &Scope) -> Vec<Event> {
+        let r = self.events.read().await;
+        // Filter history based on privacy scope
+        let mut history = Vec::new();
+        for e in r.iter() {
+            if requesting_scope.can_read(&e.scope) {
+                history.push(e.clone());
+            }
+        }
+        history
+    }
+    
+    pub async fn current_tokens(&self) -> usize {
+        *self.token_count.read().await
+    }
+    
+    pub fn max_tokens(&self) -> usize {
+        self.max_tokens
+    }
+    
+    /// Scans the memory directory and loads all existing transcript histories into active memory.
+    pub async fn load_persisted(&self) {
+        let memory_dir = self.get_memory_dir();
+        
+        let mut dirs = match tokio::fs::read_dir(&memory_dir).await {
+            Ok(d) => d,
+            Err(_) => return, // No memory dir exists yet
+        };
+
+        let mut all_events = Vec::new();
+        let mut total_tokens = 0;
+
+        while let Ok(Some(entry)) = dirs.next_entry().await {
+            let path = entry.path();
+            if path.is_dir() {
+                let transcript_path = path.join("transcript.jsonl");
+                if let Ok(contents) = tokio::fs::read_to_string(&transcript_path).await {
+                    for line in contents.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() { continue; }
+                        if let Ok(event) = serde_json::from_str::<crate::models::message::Event>(trimmed) {
+                            total_tokens += event.content.len() / 4;
+                            all_events.push(event);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !all_events.is_empty() {
+            let mut w = self.events.write().await;
+            *w = all_events;
+            
+            let mut tc = self.token_count.write().await;
+            *tc = total_tokens;
+            
+            println!("Loaded {} persistent memory events (approx {} tokens) across sessions.", w.len(), *tc);
+        }
+    }
+    
+    /// Clears the working memory transcript (called internally by Autosave)
+    pub async fn clear(&self, scope: &Scope) {
+        let mut w = self.events.write().await;
+        w.retain(|e| e.scope != *scope); // Remove events for this scope
+        
+        let mut tc = self.token_count.write().await;
+        // Simple reset for now. In a robust system, we'd recount the remaining events.
+        *tc = 0; 
+        
+        let path = self.get_transcript_path(scope);
+        let _ = fs::remove_file(path).await;
+    }
+
+    /// Completely wipes all RAM structures.
+    pub async fn clear_all(&self) {
+        let mut w = self.events.write().await;
+        w.clear();
+        let mut tc = self.token_count.write().await;
+        *tc = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_working_memory_add_and_get() {
+        let test_dir = std::env::temp_dir().join(format!("hive_working_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mem = WorkingMemory::new(Some(test_dir));
+        let pub_scope = Scope::Public { channel_id: "test".into(), user_id: "test".into() };
+        let priv_scope = Scope::Private { user_id: "user123".to_string() };
+
+        let event1 = Event {
+            platform: "test".into(),
+            scope: pub_scope.clone(),
+            author_name: "Alice".into(),
+            author_id: "test".into(),
+            content: "Hello working memory".into(), // length 20 -> 5 tokens
+        };
+        
+        let event2 = Event {
+            platform: "test".into(),
+            scope: priv_scope.clone(),
+            author_name: "Bob".into(),
+            author_id: "test".into(),
+            content: "Secret".into(), // length 6 -> 1 token
+        };
+
+        mem.add_event(event1).await;
+        mem.add_event(event2).await;
+
+        assert_eq!(mem.current_tokens().await, 6);
+        assert_eq!(mem.max_tokens(), 256_000);
+
+        let pub_hist = mem.get_history(&pub_scope).await;
+        assert_eq!(pub_hist.len(), 1);
+        assert_eq!(pub_hist[0].author_name, "Alice");
+
+        let priv_hist = mem.get_history(&priv_scope).await;
+        assert_eq!(priv_hist.len(), 1); // Now completely siloed
+
+
+    }
+
+    #[tokio::test]
+    async fn test_working_memory_clear() {
+        let test_dir = std::env::temp_dir().join(format!("hive_working_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mem = WorkingMemory::new(Some(test_dir));
+        let scope = Scope::Public { channel_id: "test".into(), user_id: "test".into() };
+
+        let event = Event {
+            platform: "test".into(),
+            scope: scope.clone(),
+            author_name: "Alice".into(),
+            author_id: "test".into(),
+            content: "Test event".into(),
+        };
+
+        mem.add_event(event).await;
+        assert_eq!(mem.get_history(&scope).await.len(), 1);
+        assert_eq!(mem.current_tokens().await, 2);
+
+        mem.clear(&scope).await;
+        assert_eq!(mem.get_history(&scope).await.len(), 0);
+        assert_eq!(mem.current_tokens().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_working_memory_default() {
+        let mem = WorkingMemory::default();
+        let scope = Scope::Public { channel_id: "test".into(), user_id: "test".into() };
+        // Verify default sets path to "memory" and limit to 256k
+        assert_eq!(mem.get_memory_dir(), std::path::PathBuf::from("memory"));
+        assert_eq!(mem.max_tokens(), 256000);
+    }
+
+    #[tokio::test]
+    async fn test_working_memory_clear_all() {
+        let test_dir = std::env::temp_dir().join(format!("hive_working_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mem = WorkingMemory::new(Some(test_dir));
+        let scope1 = Scope::Public { channel_id: "test".into(), user_id: "test".into() };
+        let scope2 = Scope::Private { user_id: "user123".to_string() };
+
+        mem.add_event(Event {
+            platform: "test".into(),
+            scope: scope1.clone(),
+            author_name: "Alice".into(),
+            author_id: "test".into(),
+            content: "Public event".into(),
+        }).await;
+
+        mem.add_event(Event {
+            platform: "test".into(),
+            scope: scope2.clone(),
+            author_name: "Bob".into(),
+            author_id: "test".into(),
+            content: "Private event".into(),
+        }).await;
+
+        assert_eq!(mem.current_tokens().await, 6); // 3 (Public) + 3 (Private) tokens
+        
+        mem.clear_all().await;
+        
+        assert_eq!(mem.current_tokens().await, 0);
+        let r = mem.events.read().await;
+        assert_eq!(r.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_working_memory_load_persisted() {
+        let test_dir = std::env::temp_dir().join(format!("hive_working_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mem = WorkingMemory::new(Some(test_dir));
+        let scope = Scope::Private { user_id: "load_test".into() };
+        
+        let path = mem.get_transcript_path(&scope);
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+
+        let event = Event {
+            platform: "test".into(),
+            scope: scope.clone(),
+            author_name: "DiskUser".into(),
+            author_id: "test".into(),
+            content: "Loaded from disk".into(), // length 16 -> 4 tokens
+        };
+        
+        let json = serde_json::to_string(&event).unwrap();
+        let _ = tokio::fs::write(&path, format!("{}\n", json)).await;
+
+        mem.load_persisted().await;
+
+        let hist = mem.get_history(&scope).await;
+        assert!(hist.iter().any(|e| e.author_name == "DiskUser"));
+        assert!(mem.current_tokens().await >= 4);
+
+        let _ = tokio::fs::remove_dir_all(path.parent().unwrap()).await;
+    }
+
+    #[tokio::test]
+    async fn test_working_memory_load_persisted_no_dir() {
+        let test_dir = std::env::temp_dir().join(format!("hive_working_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = tokio::fs::remove_dir_all(&test_dir).await;
+
+        let mem = WorkingMemory::new(Some(test_dir.clone()));
+        // This should safely hit the `Err(_) => return` at line 107
+        mem.load_persisted().await;
+        assert_eq!(mem.current_tokens().await, 0);
+    }
+}
