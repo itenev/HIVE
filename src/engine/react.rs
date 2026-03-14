@@ -45,6 +45,7 @@ pub async fn execute_react_loop(
     let mut observer_attempts = 0;
     let mut all_rejections: Vec<(String, String, String)> = vec![];
     let mut completed_tools: Vec<(String, String)> = vec![]; // (task_id, tool_type)
+    let mut consecutive_json_failures: u8 = 0;
 
     // The inner ReAct loop
     loop {
@@ -88,15 +89,35 @@ pub async fn execute_react_loop(
         let cleaned_json = crate::engine::repair::repair_planner_json(&candidate_text);
         
         let plan = match serde_json::from_str::<crate::agent::planner::AgentPlan>(&cleaned_json) {
-            Ok(p) => p,
+            Ok(p) => {
+                consecutive_json_failures = 0; // Reset on success
+                p
+            },
             Err(e) => {
-                context_from_agent.push_str(&format!(
-                    "Turn {} - [SYSTEM COMPILER ERROR: INVISIBLE TO USER] YOUR OUTPUT WAS NOT VALID JSON. You MUST output EXACTLY one JSON block. Here is the EXACT format:\n```json\n{{\n  \"thought\": \"your reasoning here\",\n  \"tasks\": [\n    {{\n      \"task_id\": \"step_1\",\n      \"tool_type\": \"reply_to_request\",\n      \"description\": \"your response to the user here\",\n      \"depends_on\": []\n    }}\n  ]\n}}\n```\nOutput ONLY the JSON block above. No preamble, no explanation, no markdown outside the block.\n\n",
-                    current_turn
-                ));
-                tracing::warn!("[AGENT LOOP] 🔄 Turn {} output was not JSON. Enforcing JSON...", current_turn);
+                consecutive_json_failures += 1;
+                tracing::warn!("[AGENT LOOP] 🔄 Turn {} output was not JSON (attempt {}). Enforcing JSON...", current_turn, consecutive_json_failures);
                 tracing::error!("[AGENT LOOP] ❌ RAW TEXT THAT FAILED PARSING (serde error: {}):\n==========\n{}\n==========", e, candidate_text);
-                continue;
+                
+                if consecutive_json_failures >= 2 {
+                    // Auto-wrap: The LLM gave us a perfectly good response, it just wasn't JSON.
+                    // Wrap it into a synthetic reply_to_request rather than burning another LLM call.
+                    tracing::warn!("[AGENT LOOP] 🔧 Auto-wrapping plain text into reply_to_request after {} failures.", consecutive_json_failures);
+                    crate::agent::planner::AgentPlan {
+                        thought: Some("Auto-wrapped from plain text output.".to_string()),
+                        tasks: vec![crate::agent::planner::AgentTask {
+                            task_id: "auto_reply".to_string(),
+                            tool_type: "reply_to_request".to_string(),
+                            description: candidate_text.trim().to_string(),
+                            depends_on: vec![],
+                        }],
+                    }
+                } else {
+                    context_from_agent.push_str(&format!(
+                        "Turn {} - [SYSTEM COMPILER ERROR: INVISIBLE TO USER] YOUR OUTPUT WAS NOT VALID JSON. You MUST output EXACTLY one JSON block. Here is the EXACT format:\n```json\n{{\n  \"thought\": \"your reasoning here\",\n  \"tasks\": [\n    {{\n      \"task_id\": \"step_1\",\n      \"tool_type\": \"reply_to_request\",\n      \"description\": \"your response to the user here\",\n      \"depends_on\": []\n    }}\n  ]\n}}\n```\nOutput ONLY the JSON block above. No preamble, no explanation, no markdown outside the block.\n\n",
+                        current_turn
+                    ));
+                    continue;
+                }
             }
         };
         
