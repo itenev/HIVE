@@ -8,9 +8,12 @@ pub mod prompts;
 mod providers;
 pub mod agent;
 pub mod teacher;
+pub mod computer;
+pub mod voice;
 
 use std::sync::Arc;
 use tokio::io::AsyncBufRead;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 use crate::engine::EngineBuilder;
 use crate::models::capabilities::AgentCapabilities;
 use crate::platforms::discord::DiscordPlatform;
@@ -31,8 +34,26 @@ fn get_reader() -> Box<dyn AsyncBufRead + Unpin + Send + Sync> {
 
 #[cfg(not(tarpaulin_include))]
 pub async fn run_app() {
+    let file_appender = tracing_appender::rolling::never("logs", "hive.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    
+    // Set up tracing to write to both stdout and the file
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(
+            std::io::stdout
+                .with_max_level(tracing::Level::INFO)
+                .and(non_blocking),
+        )
+        .finish();
+        
+    let _ = tracing::subscriber::set_global_default(subscriber);
+
+    tracing::info!("Starting HIVE initialization sequence...");
+    
     println!("Starting HIVE...");
     let reader = get_reader();
+    
+    dotenv::dotenv().ok(); // Load .env file manually
 
     let discord_token = std::env::var("DISCORD_TOKEN").unwrap_or_default();
 

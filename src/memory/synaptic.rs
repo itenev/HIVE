@@ -23,6 +23,18 @@ impl Neo4jGraph {
     pub async fn search(&self, _concept: &str) -> Vec<String> {
         vec![]
     }
+
+    pub async fn get_recent_nodes(&self, _limit: usize) -> Vec<(String, String)> {
+        vec![]
+    }
+
+    pub async fn get_beliefs(&self, _limit: usize) -> Vec<String> {
+        vec![]
+    }
+
+    pub async fn get_recent_relationships(&self, _limit: usize) -> Vec<(String, String, String)> {
+        vec![]
+    }
 }
 
 #[cfg(test)]
@@ -35,6 +47,9 @@ mod tests {
         let syn2 = Neo4jGraph::default();
         syn.store("concept", "data").await;
         assert!(syn.search("concept").await.is_empty());
+        assert!(syn.get_recent_nodes(5).await.is_empty());
+        assert!(syn.get_beliefs(5).await.is_empty());
+        assert!(syn.get_recent_relationships(5).await.is_empty());
         let _ = syn2;
     }
 }

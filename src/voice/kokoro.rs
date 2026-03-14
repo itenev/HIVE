@@ -1,7 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::SystemTime;
 use tokio::fs;
 use tracing::{error, info, warn};
@@ -62,11 +61,20 @@ impl KokoroTTS {
         // Subprocess to the python environment to run Kokoro
         let python_cmd = std::env::var("HIVE_PYTHON_BIN").unwrap_or_else(|_| "python3".to_string());
 
-        let output = Command::new(python_cmd)
-            .arg(&self.worker_path)
-            .arg(text)
-            .arg(&output_path)
-            .output()?;
+        let output_res = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            tokio::process::Command::new(python_cmd)
+                .arg(&self.worker_path)
+                .arg(text)
+                .arg(&output_path)
+                .output()
+        ).await;
+
+        let output = match output_res {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(std::io::Error::other("Kokoro generation timed out after 60 seconds.")),
+        };
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);

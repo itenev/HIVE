@@ -54,11 +54,20 @@ mod tests {
     #[test]
     fn test_format_hud_with_roster() {
         let data = HudData {
-            timestamp: "2026-03-07T12:00:00Z".to_string(),
+            temporal_metrics: "Current System Time: 2026-03-07T12:00:00Z".to_string(),
+            timeline_narratives: String::new(),
             active_scope: "Public (Broadcast Channel: main)".to_string(),
             working_memory_load: "500 / 256000".to_string(),
             scratchpad_content: None,
             room_roster: Some("Alice, Bob, Charlie".to_string()),
+            relevant_lessons: None,
+            relevant_routines: None,
+            global_activity: String::new(),
+            kg_snapshot: String::new(),
+            tape_focus: String::new(),
+            user_preferences: String::new(),
+            system_logs: String::new(),
+            recent_reasoning_traces: String::new(),
         };
         
         let output = hud::format_hud(&data);
@@ -70,11 +79,20 @@ mod tests {
     #[test]
     fn test_format_hud_no_scratchpad_no_roster() {
         let data = HudData {
-            timestamp: "2026-03-07T12:00:00Z".to_string(),
+            temporal_metrics: "Current System Time: 2026-03-07T12:00:00Z".to_string(),
+            timeline_narratives: String::new(),
             active_scope: "Private (User ID: u1)".to_string(),
             working_memory_load: "0 / 256000".to_string(),
             scratchpad_content: None,
             room_roster: None,
+            relevant_lessons: None,
+            relevant_routines: None,
+            global_activity: String::new(),
+            kg_snapshot: String::new(),
+            tape_focus: String::new(),
+            user_preferences: String::new(),
+            system_logs: String::new(),
+            recent_reasoning_traces: String::new(),
         };
         
         let output = hud::format_hud(&data);

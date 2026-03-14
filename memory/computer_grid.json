@@ -1,0 +1,15 @@
+{
+  "cells": {
+    "0,0,0": {
+      "content": "{\"gauntlet\": \"active\", \"version\": 2}",
+      "format": "json",
+      "status": "Idle",
+      "last_updated": "2026-03-14T16:41:43.925509+00:00"
+    }
+  },
+  "cursor": [
+    0,
+    0,
+    0
+  ]
+}

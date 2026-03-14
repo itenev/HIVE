@@ -7,16 +7,27 @@ pub mod working;
 pub mod autosave;
 pub mod synaptic;
 pub mod timeline;
+pub mod timelines;
+pub mod temporal;
 pub mod scratch;
+pub mod lessons;
 
 pub use working::*;
 pub use autosave::*;
 pub use synaptic::*;
 pub use timeline::*;
+pub use timelines::*;
+pub use temporal::*;
 pub use scratch::*;
+pub mod preferences;
+pub use preferences::*;
+pub use lessons::*;
 
-use std::collections::HashMap;
-use tokio::sync::RwLock;
+use std::collections::{HashMap, VecDeque};
+use tokio::sync::{Mutex, RwLock};
+use chrono::Utc;
+use crate::computer::alu::ALU;
+use crate::computer::turing_grid::TuringGrid;
 /// The Unified 5-Tier Memory Store.
 #[derive(Debug, Clone)]
 pub struct MemoryStore {
@@ -25,6 +36,13 @@ pub struct MemoryStore {
     pub synaptic: Neo4jGraph,
     pub scratch: Scratchpad,
     pub autosave: AutosaveManager,
+    pub preferences: PreferenceStore,
+    pub temporal: Arc<RwLock<TemporalTracker>>,
+    pub timelines: Arc<TimelineStore>,
+    pub activity_stream: Arc<RwLock<VecDeque<String>>>,
+    pub lessons: LessonsManager,
+    pub turing_grid: Arc<Mutex<TuringGrid>>,
+    pub alu: Arc<ALU>,
     /// Tracks recent active participants in Public channels. Maps channel_id -> Vec<author_name>
     rosters: Arc<RwLock<HashMap<String, Vec<String>>>>,
 }
@@ -48,6 +66,13 @@ impl MemoryStore {
         let synaptic = Neo4jGraph::new();
         let timeline = TimelineManager::new(Some(memory_dir.clone()));
         let scratch = Scratchpad::new(Some(memory_dir.clone()));
+        let preferences = PreferenceStore::new(Some(memory_dir.clone()));
+        let lessons = LessonsManager::new(Some(memory_dir.clone()));
+        
+        let temporal = Arc::new(RwLock::new(TemporalTracker::new(&memory_dir.join("core"))));
+        let timelines = Arc::new(TimelineStore::new(&memory_dir.join("core")));
+        let turing_grid = Arc::new(Mutex::new(TuringGrid::new(memory_dir.join("computer_grid.json"))));
+        let alu = Arc::new(ALU::new(Some(memory_dir.join("computer_runtime"))));
 
         Self {
             working,
@@ -55,20 +80,35 @@ impl MemoryStore {
             synaptic,
             scratch,
             autosave,
+            preferences,
+            lessons,
+            temporal,
+            timelines,
+            turing_grid,
+            alu,
+            activity_stream: Arc::new(RwLock::new(VecDeque::new())),
             rosters: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Asynchronously loads persistent memory from disk on boot.
     pub async fn init(&self) {
         self.working.load_persisted().await;
+        // Init grid logic:
+        let grid_path = self.turing_grid.lock().await.persistence_path.clone();
+        if let Ok(loaded) = TuringGrid::load(grid_path).await {
+            *self.turing_grid.lock().await = loaded;
+        } else {
+            tracing::debug!("[Memory] 🔲 Turing Grid starting fresh (no persisted state)");
+        }
+        let _ = self.alu.init().await;
+        self.temporal.write().await.init_and_register_boot().await;
     }
 
     /// Stores a new event into the primary working memory and appends to the timeline.
     pub async fn add_event(&self, event: Event) {
         // Track roster for Public scopes
         if let Scope::Public { channel_id, .. } = &event.scope {
-            let mut rosters = self.rosters.write().await;
+            let mut rosters: tokio::sync::RwLockWriteGuard<'_, HashMap<String, Vec<String>>> = self.rosters.write().await;
             let channel_roster = rosters.entry(channel_id.clone()).or_insert_with(Vec::new);
             
             // Add if not already present; push to end to signify recency
@@ -85,13 +125,32 @@ impl MemoryStore {
             }
         }
 
+        let time = Utc::now().format("%H:%M:%S").to_string();
+
+        // 0. Inject into transient Global Activity Stream (HUD Telemetry)
+        if event.author_name != "System" && !event.content.starts_with("***") {
+            let mut stream: tokio::sync::RwLockWriteGuard<'_, VecDeque<String>> = self.activity_stream.write().await;
+            let target_line = match &event.scope {
+                Scope::Public { channel_id: _, user_id: _ } => {
+                    format!("[{}] [PUBLIC] {}: {}...", time, event.author_name, &event.content.chars().take(50).collect::<String>().trim().replace('\n', " "))
+                }
+                Scope::Private { user_id } => {
+                    format!("[{}] [(Encrypted PM Header)] UID:{}", time, user_id)
+                }
+            };
+            stream.push_back(target_line);
+            if stream.len() > 10 {
+                stream.pop_front();
+            }
+        }
+
         self.working.add_event(event.clone()).await;
         self.timeline.append_event(&event).await;
     }
 
     /// Fetches a comma-separated list of active participants in a channel
     pub async fn get_roster(&self, channel_id: &str) -> Option<String> {
-        let rosters = self.rosters.read().await;
+        let rosters: tokio::sync::RwLockReadGuard<'_, HashMap<String, Vec<String>>> = self.rosters.read().await;
         if let Some(roster) = rosters.get(channel_id) {
             if roster.is_empty() {
                 None
@@ -164,6 +223,40 @@ impl MemoryStore {
         }
         
         println!("⚠️ FACTORY RESET EXECUTED: All persistent memory has been wiped.");
+    }    
+    /// Builds a compact narrative of all public interactions currently in working memory.
+    /// Used to give Apis context about her day's work when entering autonomy mode.
+    pub async fn get_public_narrative(&self) -> String {
+        let events = self.working.get_all_events().await;
+        let mut users_seen = std::collections::HashSet::new();
+        let mut conversations = Vec::new();
+
+        for e in events.iter() {
+            if let Scope::Public { .. } = &e.scope {
+                // Skip internal events
+                if e.author_name.contains("Internal") || e.author_name == "System" {
+                    continue;
+                }
+                if e.author_name != "Apis" {
+                    users_seen.insert(e.author_name.clone());
+                }
+                conversations.push(format!("[{}]: {}", e.author_name, e.content.trim()));
+            }
+        }
+
+        if conversations.is_empty() {
+            return "No public interactions recorded in current session.".to_string();
+        }
+
+        let mut narrative = String::new();
+        narrative.push_str("📋 **Public Engagement Log**\n");
+        narrative.push_str(&format!("• Users engaged: {}\n\n", users_seen.into_iter().collect::<Vec<_>>().join(", ")));
+        narrative.push_str("**Full Conversation History:**\n");
+        for line in &conversations {
+            narrative.push_str(&format!("{}\n", line));
+        }
+
+        narrative
     }
 }
 

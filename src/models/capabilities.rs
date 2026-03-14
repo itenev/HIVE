@@ -103,4 +103,20 @@ mod tests {
         assert!(output2.contains("read_code"));
         assert!(!output2.contains("wipe_memory"));
     }
+
+    #[test]
+    fn test_format_all_enabled_but_non_admin() {
+        let caps = AgentCapabilities {
+            admin_users: vec!["admin1".into()],
+            has_terminal_access: true,
+            has_internet_access: true,
+            admin_tools: vec!["admin_tool".into()],
+            default_tools: vec![],
+        };
+        let ev = get_dummy_event("user2");
+        let output = caps.format_for_prompt(&ev);
+        assert!(output.contains("TERMINAL/SYSTEM/BASH EXECUTION: DISABLED"));
+        assert!(output.contains("INTERNET/WEB ACCESS: DISABLED"));
+        assert!(output.contains("ACTIVE PLUGINS/TOOLS: NONE"));
+    }
 }

@@ -4,63 +4,183 @@ use std::sync::Arc;
 use crate::models::tool::{ToolTemplate, ToolResult, ToolStatus};
 use crate::providers::Provider;
 use crate::memory::MemoryStore;
-use crate::models::scope::Scope;
+
 
 pub mod planner;
 pub mod tool;
+pub mod preferences;
+pub mod synthesis;
+pub mod synthesis_drone;
+pub mod outreach;
+pub mod skills;
+pub mod routines;
+pub mod lessons_drone;
+pub mod turing_drone;
+pub mod web_drone;
+pub mod image_drone;
+pub mod tts_drone;
+pub mod file_reader;
+pub mod file_writer;
+pub mod registry;
 
 pub struct AgentManager {
     registry: HashMap<String, ToolTemplate>,
+    discord_tools: HashMap<String, ToolTemplate>,
     provider: Arc<dyn Provider>,
     memory: Arc<MemoryStore>,
+    pub drives: Option<Arc<crate::engine::drives::DriveSystem>>,
+    pub outreach_gate: Option<Arc<crate::engine::outreach::OutreachGate>>,
+    pub inbox: Option<Arc<crate::engine::inbox::InboxManager>>,
 }
 
 impl AgentManager {
     pub fn new(provider: Arc<dyn Provider>, memory: Arc<MemoryStore>) -> Self {
         let mut registry = HashMap::new();
+        let mut discord_tools = HashMap::new();
         
-        // Register default built-in tools
+        // Register default built-in tools (universal — available on all platforms)
         let researcher = ToolTemplate {
             name: "researcher".into(),
             system_prompt: "You are the Researcher Tool. Your job is to analyze information, find facts, and summarize data objectively. You HAVE LIVE INTERNET ACCESS and will search the web to verify current facts.".into(),
             tools: vec![],
         };
 
+        // Discord-only tools
         let channel_reader = ToolTemplate {
-            name: "native_channel_reader".into(),
+            name: "channel_reader".into(),
             system_prompt: "You natively pull the recent message history of the current channel based on the task description Target ID. You do not use LLM inference, you return the timeline JSONL block. The planner should provide the Target Entity ID in the description.".into(),
+            tools: vec![],
+        };
+        let emoji_react = ToolTemplate {
+            name: "emoji_react".into(),
+            system_prompt: "React to the user's Discord message with a native emoji reaction. This attaches the emoji directly to the message the user sent, visible to everyone in the channel. Description format: 'emoji:[unicode emoji character]' e.g. 'emoji:[👍]' or 'emoji:[🐝]'".into(),
             tools: vec![],
         };
 
         let codebase_list = ToolTemplate {
-            name: "native_codebase_list".into(),
+            name: "codebase_list".into(),
             system_prompt: "You list all files and directories recursively from the project root. You do not use LLM inference, you simply return the directory tree. The planner should output a blank description.".into(),
             tools: vec![],
         };
 
         let codebase_read = ToolTemplate {
-            name: "native_codebase_read".into(),
-            system_prompt: "You are the Codebase Reader Tool. You natively read the contents of a specific file in the HIVE codebase. The planner must put EXACTLY the relative file path (e.g. src/engine/mod.rs) in the description.".into(),
+            name: "codebase_read".into(),
+            system_prompt: "You are the Codebase Reader Tool. You natively read the contents of a specific file in the HIVE codebase. The planner must put EXACTLY the relative file path (e.g. src/engine/mod.rs). Description format: 'name:[src/path] start_line:[1] limit:[500]'".into(),
             tools: vec![],
         };
 
         let web_search = ToolTemplate {
-            name: "native_web_search".into(),
+            name: "web_search".into(),
             system_prompt: "You are the Web Search Tool. You search the LIVE EXTERNAL INTERNET for facts, news, and external documentation via DuckDuckGo. The planner should provide the query in the description.".into(),
             tools: vec![],
         };
 
+        let manage_user_prefs = ToolTemplate {
+            name: "manage_user_preferences".into(),
+            system_prompt: "You are the User Preference Tool. You manage long-term psychological profiling and factual preferences of the user. Updates MUST include an 'action:' tag and a 'value:' tag. Valid actions are: update_name, add_hobby, add_topic, update_narrative, update_psychoanalysis. Example description: 'action:[add_hobby] value:[Archery]'".into(),
+            tools: vec![],
+        };
+
+        let outreach = ToolTemplate {
+            name: "outreach".into(),
+            system_prompt: "Proactively reach out to a Discord user or manage outreach settings. \
+                'action:[send] user_id:[discord_uid] content:[text]' — send a proactive message (DM or public, per prefs). \
+                'action:[set_frequency] user_id:[uid] frequency:[low|medium|high|unlimited]' — set contact frequency. \
+                'action:[set_delivery] user_id:[uid] delivery:[dm|public|both|none]' — set delivery channel. \
+                'action:[status] user_id:[uid]' — show outreach settings. \
+                'action:[inbox_status] user_id:[uid]' — show unread inbox summary.".into(),
+            tools: vec![],
+        };
+
+        let store_lesson = ToolTemplate { name: "store_lesson".into(), system_prompt: "Store an important behavioral or factual lesson you have learned. Format: 'lesson:[text] keywords:[comma separated] confidence:[0.0-1.0]'".into(), tools: vec![] };
+        let manage_skill = ToolTemplate { name: "manage_skill".into(), system_prompt: "[ADMIN ONLY] Create, list, or execute custom Python or Bash scripts. Stored and scoped to the current user/channel. Description format: 'action:[create/list/execute] name:[skill_name.py] content:[RAW CODE]'".into(), tools: vec![] };
+        let manage_routine = ToolTemplate { name: "manage_routine".into(), system_prompt: "Create, read, or list OpenClaw-style declarative markdown Routines. Routines instruct you on how to solve complex tasks. Description format: 'action:[create/read/list] name:[routine.md] content:[RAW MARKDOWN]'".into(), tools: vec![] };
+        let synthesizer = ToolTemplate { name: "synthesizer".into(), system_prompt: "Fan-in aggregator drone. Reads all DRONE OUTPUT blocks already in context and condenses them into a single compact synthesis. Use this as the final task in a multi-wave plan when you need to merge results before replying. Description: plain English instruction on what to synthesise, e.g. 'Summarise the web and memory results into 3 key findings.'. CRITICAL INSTRUCTION: If any drone output includes a tag like [ATTACH_IMAGE](...), [ATTACH_FILE](...), or [ATTACH_AUDIO](...), you MUST include that EXACT tag verbatim in your output so it reaches the user.".into(), tools: vec![] };
+        let read_logs = ToolTemplate { name: "read_logs".into(), system_prompt: "Reads deep spans of the core system log (logs/hive.log) for debug introspection. Description format: 'action:[read] lines:[number of lines to read starting from the tail]'".into(), tools: vec![] };
+        let review_reasoning = ToolTemplate { name: "review_reasoning".into(), system_prompt: "Read historical ReAct reasoning traces from working memory. Use this to remember why you made specific decisions turns ago. Description format: 'action:[read] turns_ago:[number of turns ago to start reading]'".into(), tools: vec![] };
+        let operate_turing_grid = ToolTemplate {
+            name: "operate_turing_grid".into(),
+            system_prompt: "The 3D Turing Grid is a massive arbitrary personal computation device. \
+                'action:[read]' - read current cell. \
+                'action:[write] format:[text|json|rust|python] content:[data]' - over/write cell. \
+                'action:[move] dx:[X] dy:[Y] dz:[Z]' - safely move the R/W head relative to current. \
+                'action:[scan] radius:[R]' - radar search surrounding cells for data. \
+                'action:[execute]' - route the current cell to the internal ALU kernel.".into(),
+            tools: vec![],
+        };
+        let generate_image = ToolTemplate {
+            name: "generate_image".into(),
+            system_prompt: "The Flux Image Generator. Describe the image you want generated in highly detailed stable-diffusion style prompt format. Limit ONE image per request cycle. Description format: 'prompt:[detailed prompt]'".into(),
+            tools: vec![],
+        };
+        let voice_synthesizer = ToolTemplate {
+            name: "voice_synthesizer".into(),
+            system_prompt: "The native Kokoro Text-To-Speech engine. Use this when you want to speak aloud to the user or attach a voice snippet. Format: 'text:[...text...]'".into(),
+            tools: vec![],
+        };
+        let file_writer = ToolTemplate {
+            name: "file_writer".into(),
+            system_prompt: "Document Composer Drone. Used to create professional PDF/BDF documents. Requires multi-turn usage. 1: action:[start] id:[doc_id] title:[...] author:[...] theme:[...]. 2: action:[add_section] id:[doc_id] heading:[...] content:[...payload...]. 3: action:[render] id:[doc_id]".into(),
+            tools: vec![],
+        };
+        let read_attachment = ToolTemplate {
+            name: "read_attachment".into(),
+            system_prompt: "Fetch and read a user-uploaded file attachment in-memory. NOTHING is saved to disk. Supports text, code, JSON, CSV, and markdown. DO NOT USE THIS FOR IMAGES (you have Native Vision and can see images directly). Use this when you see a [USER_ATTACHMENT] tag in the user's message. Description format: 'url:[the CDN URL from the USER_ATTACHMENT tag]'. Hard limit: 10MB max file size.".into(),
+            tools: vec![],
+        };
+        let autonomy_activity = ToolTemplate {
+            name: "autonomy_activity".into(),
+            system_prompt: "Read your autonomous activity history. Use this to answer questions like 'what have you been up to?'. \
+                'action:[summary]' — compact 24hr digest of all autonomous sessions. \
+                'action:[read] count:[N]' — read the last N detailed activity entries (default 10).".into(),
+            tools: vec![],
+        };
+
         registry.insert(researcher.name.clone(), researcher);
-        registry.insert(channel_reader.name.clone(), channel_reader);
         registry.insert(codebase_list.name.clone(), codebase_list);
         registry.insert(codebase_read.name.clone(), codebase_read);
         registry.insert(web_search.name.clone(), web_search);
+        registry.insert(manage_user_prefs.name.clone(), manage_user_prefs);
+        registry.insert(outreach.name.clone(), outreach);
+        registry.insert(store_lesson.name.clone(), store_lesson);
+        registry.insert(manage_skill.name.clone(), manage_skill);
+        registry.insert(manage_routine.name.clone(), manage_routine);
+        registry.insert(synthesizer.name.clone(), synthesizer);
+        registry.insert(read_logs.name.clone(), read_logs);
+        registry.insert(review_reasoning.name.clone(), review_reasoning);
+        registry.insert(operate_turing_grid.name.clone(), operate_turing_grid);
+        registry.insert(generate_image.name.clone(), generate_image);
+        registry.insert(voice_synthesizer.name.clone(), voice_synthesizer);
+        registry.insert(file_writer.name.clone(), file_writer);
+        registry.insert(read_attachment.name.clone(), read_attachment);
+        registry.insert(autonomy_activity.name.clone(), autonomy_activity);
+
+        // Discord-only tools
+        discord_tools.insert(channel_reader.name.clone(), channel_reader);
+        discord_tools.insert(emoji_react.name.clone(), emoji_react);
 
         Self {
             registry,
+            discord_tools,
             provider,
             memory,
+            drives: None,
+            outreach_gate: None,
+            inbox: None,
         }
+    }
+
+    /// Inject the outreach subsystem after construction.
+    pub fn with_outreach(
+        mut self,
+        drives: Arc<crate::engine::drives::DriveSystem>,
+        outreach_gate: Arc<crate::engine::outreach::OutreachGate>,
+        inbox: Arc<crate::engine::inbox::InboxManager>,
+    ) -> Self {
+        self.drives = Some(drives);
+        self.outreach_gate = Some(outreach_gate);
+        self.inbox = Some(inbox);
+        self
     }
 
     pub fn register_tool(&mut self, template: ToolTemplate) {
@@ -86,178 +206,41 @@ impl AgentManager {
         out
     }
 
+    /// Fetches tools formatted for a specific platform (universal + platform-specific)
+    pub fn get_available_tools_text_for_platform(&self, platform: &str) -> String {
+        let mut out = self.get_available_tools_text();
+        let platform_prefix = platform.split(':').next().unwrap_or("");
+        let platform_tools = match platform_prefix {
+            "discord" => Some(&self.discord_tools),
+            _ => None,
+        };
+        if let Some(tools) = platform_tools {
+            out.push_str("\n## Platform-Specific Tools (Discord)\n");
+            for (name, template) in tools {
+                out.push_str(&format!("- TOOL `{}`: {}\n", name, template.system_prompt));
+            }
+        }
+        out
+    }
+
     /// Executes a agent plan by spawning all tasks concurrently.
     /// In a fully robust graph, we would respect `depends_on`. For now, we fan out in parallel.
     #[cfg(not(tarpaulin_include))]
-    pub async fn execute_plan(&self, plan: crate::agent::planner::AgentPlan, context: &str, telemetry_tx: Option<tokio::sync::mpsc::Sender<String>>) -> Vec<ToolResult> {
+    pub async fn execute_plan(&self, plan: crate::agent::planner::AgentPlan, context: &str, scope: crate::models::scope::Scope, telemetry_tx: Option<tokio::sync::mpsc::Sender<String>>) -> Vec<ToolResult> {
         let mut futures = vec![];
 
         for task in plan.tasks {
-            // Intercept Native Tools
-            if task.tool_type == "native_channel_reader" {
-                let mem_clone = self.memory.clone();
-                let task_id = task.task_id.clone();
-                let desc = task.description.clone(); // E.g., tells which Scope or channel ID
-                
-                // For now, we assume the planner task description contains the target scope string
-                // But generally the planner executes on the current Context Event anyway.
-                // We'll parse the description or just default read the timeline logic.
-                
-                let tx_clone = telemetry_tx.clone();
-                let handle = tokio::spawn(async move {
-                    if let Some(ref tx) = tx_clone {
-                        let _ = tx.send(format!("🧠 Native Channel Reader Tool executing...\n")).await;
-                    }
-                    // Extract channel_id if possible, or we could just pass `Event` down the AgentManager tree.
-                    // To keep it simple, we'll try to extract target from desc 
-                    let target_id = desc.split_whitespace().last().unwrap_or(&"").to_string();
-                    let pub_scope = Scope::Public { channel_id: target_id.clone(), user_id: "system".into() };
-
-                    let output = if let Ok(timeline_data) = mem_clone.timeline.read_timeline(&pub_scope).await {
-                        String::from_utf8_lossy(&timeline_data).to_string()
-                    } else {
-                        "Failed to read timeline for channel.".to_string()
-                    };
-                    
-                    ToolResult {
-                        task_id,
-                        output,
-                        tokens_used: 0,
-                        status: ToolStatus::Success,
-                    }
-                });
-                futures.push(handle);
-                continue;
-            } else if task.tool_type == "native_codebase_list" {
-                let task_id = task.task_id.clone();
-                let tx_clone = telemetry_tx.clone();
-                let handle = tokio::spawn(async move {
-                    if let Some(ref tx) = tx_clone {
-                        let _ = tx.send(format!("🧠 Native Codebase List Tool executing...\n")).await;
-                    }
-                    // Quick recursive list, we'll shell out to `find` for simplicity or use standard local traversal.
-                    // Returning a hardcoded string or running a quick command is easiest since we know linux/mac.
-                    // For pure rust, we'll try std::process::Command
-                    let output = match std::process::Command::new("find").arg("src").arg("-type").arg("f").output() {
-                        Ok(res) => String::from_utf8_lossy(&res.stdout).to_string(),
-                        Err(e) => format!("Failed to list codebase: {}", e),
-                    };
-                    ToolResult {
-                        task_id,
-                        output,
-                        tokens_used: 0,
-                        status: ToolStatus::Success,
-                    }
-                });
-                futures.push(handle);
-                continue;
-            } else if task.tool_type == "native_codebase_read" {
-                let task_id = task.task_id.clone();
-                let desc = task.description.clone();
-                let tx_clone = telemetry_tx.clone();
-                let handle = tokio::spawn(async move {
-                    if let Some(ref tx) = tx_clone {
-                        let _ = tx.send(format!("🧠 Native Codebase Reader Tool reading: {}\n", desc)).await;
-                    }
-                    // Extract the path by looking for something that looks like a file path
-                    // Apis often writes: "Read the main engine module file (src/engine/mod.rs) to verify..."
-                    let target_path = desc
-                        .split_whitespace()
-                        .find(|s| s.contains("src/") || s.contains('/') || s.ends_with(".rs") || s.ends_with(".py") || s.ends_with(".toml"))
-                        .map(|s| s.trim_matches(|c| c == '(' || c == ')' || c == '\'' || c == '"' || c == '`'))
-                        .unwrap_or_else(|| desc.split_whitespace().last().unwrap_or(""))
-                        .to_string();
-                    
-                    // Basic sanity check to prevent arbitrary file reading outside cwd
-                    let output = if target_path.contains("..") || target_path.starts_with('/') {
-                        "Access Denied: Path traverses outside isolated project root.".to_string()
-                    } else if let Ok(content) = tokio::fs::read_to_string(&target_path).await {
-                        format!("--- FILE: {} ---\n{}", target_path, content)
-                    } else {
-                        // Fuzzy fallback: extract filename and search src/ for it
-                        let filename = std::path::Path::new(&target_path)
-                            .file_name()
-                            .and_then(|f| f.to_str())
-                            .unwrap_or(&target_path);
-                        
-                        let find_result = std::process::Command::new("find")
-                            .args(&["src", "-name", filename, "-type", "f"])
-                            .output();
-                        
-                        match find_result {
-                            Ok(res) => {
-                                let found = String::from_utf8_lossy(&res.stdout);
-                                let found_path = found.trim().lines().next().unwrap_or("");
-                                if !found_path.is_empty() {
-                                    if let Ok(content) = tokio::fs::read_to_string(found_path).await {
-                                        format!("--- FILE: {} (resolved from '{}') ---\n{}", found_path, target_path, content)
-                                    } else {
-                                        format!("Failed to read file: {} (found at {} but read failed)", target_path, found_path)
-                                    }
-                                } else {
-                                    format!("Failed to read file: {} (not found, also searched src/ for '{}')", target_path, filename)
-                                }
-                            }
-                            Err(_) => format!("Failed to read file: {}", target_path),
-                        }
-                    };
-
-                    ToolResult {
-                        task_id,
-                        output,
-                        tokens_used: 0,
-                        status: ToolStatus::Success,
-                    }
-                });
-                futures.push(handle);
-                continue;
-            } else if task.tool_type == "native_web_search" || task.tool_type == "researcher" {
-                let task_id = task.task_id.clone();
-                let desc = task.description.clone();
-                let tx_clone = telemetry_tx.clone();
-
-                let handle = tokio::spawn(async move {
-                    if let Some(ref tx) = tx_clone {
-                        let _ = tx.send(format!("🌐 Native Web Search Tool searching for: {}\n", desc)).await;
-                    }
-                    
-                    // Simple internet fetch using curl to DuckDuckGo HTML Lite
-                    let query = desc.replace(" ", "+");
-                    let output = match std::process::Command::new("curl")
-                        .args(&["-s", "-A", "Mozilla/5.0", &format!("https://html.duckduckgo.com/html/?q={}", query)])
-                        .output() 
-                    {
-                        Ok(res) => {
-                            let html = String::from_utf8_lossy(&res.stdout);
-                            if html.is_empty() {
-                                "Failed to retrieve search results (empty response).".to_string()
-                            } else {
-                                // Extremely naive HTML stripping to extract snippets
-                                let mut text = String::new();
-                                let mut in_tag = false;
-                                for c in html.chars() {
-                                    if c == '<' { in_tag = true; }
-                                    else if c == '>' { in_tag = false; text.push(' '); }
-                                    else if !in_tag { text.push(c); }
-                                }
-                                
-                                // Clean up excessive whitespace
-                                let cleaned: Vec<&str> = text.split_whitespace().collect();
-                                let final_text = cleaned.join(" ");
-                                
-                                format!("--- SEARCH RESULTS for '{}' ---\n{}", desc, final_text)
-                            }
-                        }
-                        Err(e) => format!("Failed to execute search: {}", e),
-                    };
-
-                    ToolResult {
-                        task_id,
-                        output,
-                        tokens_used: 0,
-                        status: ToolStatus::Success,
-                    }
-                });
+            if let Some(handle) = crate::agent::registry::dispatch_native_tool(
+                &task,
+                context,
+                &scope,
+                telemetry_tx.clone(),
+                self.memory.clone(),
+                self.provider.clone(),
+                self.outreach_gate.clone(),
+                self.inbox.clone(),
+                self.drives.clone(),
+            ) {
                 futures.push(handle);
                 continue;
             }
@@ -304,204 +287,4 @@ impl AgentManager {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::providers::MockProvider;
-    use crate::models::tool::ToolStatus;
-
-    #[tokio::test]
-    async fn test_agent_manager_registration() {
-        let provider = Arc::new(MockProvider::new());
-        let memory = Arc::new(MemoryStore::default());
-        let mut agent = AgentManager::new(provider, memory);
-        
-        let template = ToolTemplate {
-            name: "test_tool".into(),
-            system_prompt: "sys".into(),
-            tools: vec![],
-        };
-        
-        agent.register_tool(template.clone());
-        assert!(agent.get_template("test_tool").is_some());
-    }
-
-    #[tokio::test]
-    async fn test_agent_execute_plan_success() {
-        let mut mock_provider = MockProvider::new();
-        mock_provider
-            .expect_generate()
-            .returning(|_, _, _, _, _| Ok("Tool output".to_string()));
-
-        let memory = Arc::new(MemoryStore::default());
-        let agent = AgentManager::new(Arc::new(mock_provider), memory);
-        
-        let plan = crate::agent::planner::AgentPlan {
-            thought: Some("I should do research".to_string()),
-            tasks: vec![
-                crate::agent::planner::AgentTask {
-                    task_id: "1".into(),
-                    tool_type: "researcher".into(),
-                    description: "do research".into(),
-                    depends_on: vec![],
-                }
-            ],
-        };
-
-        let results = agent.execute_plan(plan, "User said hello", None).await;
-        
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].task_id, "1");
-        assert_eq!(results[0].output, "Tool output");
-        assert_eq!(results[0].status, ToolStatus::Success);
-    }
-
-    #[tokio::test]
-    async fn test_agent_execute_plan_tool_not_found() {
-        let mock_provider = MockProvider::new();
-        let memory = Arc::new(MemoryStore::default());
-        let agent = AgentManager::new(Arc::new(mock_provider), memory);
-        
-        let plan = crate::agent::planner::AgentPlan {
-            thought: None,
-            tasks: vec![
-                crate::agent::planner::AgentTask {
-                    task_id: "2".into(),
-                    tool_type: "missing_tool".into(),
-                    description: "fail".into(),
-                    depends_on: vec![],
-                }
-            ],
-        };
-
-        let results = agent.execute_plan(plan, "Context", None).await;
-        
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].task_id, "2");
-        assert!(matches!(results[0].status, ToolStatus::Failed(_)));
-    }
-
-    #[tokio::test]
-    async fn test_agent_native_channel_reader() {
-        let mock_provider = MockProvider::new();
-        let memory = Arc::new(MemoryStore::default());
-        // Populate timeline so read has something
-        let test_evt = crate::models::message::Event {
-            platform: "test".into(),
-            scope: crate::models::scope::Scope::Public { channel_id: "test_chan".into(), user_id: "system".into() },
-            author_name: "test".into(),
-            author_id: "test".into(),
-            content: "test timeline string payload".into(),
-        };
-        let _ = memory.timeline.append_event(&test_evt).await;
-
-        let agent = AgentManager::new(Arc::new(mock_provider), memory);
-        
-        let plan = crate::agent::planner::AgentPlan {
-            thought: None,
-            tasks: vec![
-                crate::agent::planner::AgentTask {
-                    task_id: "1".into(),
-                    tool_type: "native_channel_reader".into(),
-                    description: "read test_chan".into(),
-                    depends_on: vec![],
-                }
-            ],
-        };
-
-        let results = agent.execute_plan(plan, "Context", None).await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].output.contains("test timeline"));
-    }
-
-    #[tokio::test]
-    async fn test_agent_native_codebase_list() {
-        let mock_provider = MockProvider::new();
-        let memory = Arc::new(MemoryStore::default());
-        let agent = AgentManager::new(Arc::new(mock_provider), memory);
-        
-        let plan = crate::agent::planner::AgentPlan {
-            thought: None,
-            tasks: vec![
-                crate::agent::planner::AgentTask {
-                    task_id: "1".into(),
-                    tool_type: "native_codebase_list".into(),
-                    description: "".into(),
-                    depends_on: vec![],
-                }
-            ],
-        };
-
-        let results = agent.execute_plan(plan, "Context", None).await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].output.contains("src/agent/mod.rs"));
-    }
-
-    #[tokio::test]
-    async fn test_agent_native_codebase_read() {
-        let mock_provider = MockProvider::new();
-        let memory = Arc::new(MemoryStore::default());
-        let agent = AgentManager::new(Arc::new(mock_provider), memory);
-        
-        let plan = crate::agent::planner::AgentPlan {
-            thought: None,
-            tasks: vec![
-                crate::agent::planner::AgentTask {
-                    task_id: "1".into(),
-                    tool_type: "native_codebase_read".into(),
-                    description: "Cargo.toml".into(), // guaranteed to exist
-                    depends_on: vec![],
-                }
-            ],
-        };
-
-        let results = agent.execute_plan(plan, "Context", None).await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].output.contains("--- FILE: Cargo.toml"));
-    }
-
-    #[tokio::test]
-    async fn test_agent_native_codebase_read_security() {
-        let mock_provider = MockProvider::new();
-        let memory = Arc::new(MemoryStore::default());
-        let agent = AgentManager::new(Arc::new(mock_provider), memory);
-        
-        let plan = crate::agent::planner::AgentPlan {
-            thought: None,
-            tasks: vec![
-                crate::agent::planner::AgentTask {
-                    task_id: "1".into(),
-                    tool_type: "native_codebase_read".into(),
-                    description: "../Cargo.toml".into(), // traverse attempts
-                    depends_on: vec![],
-                }
-            ],
-        };
-
-        let results = agent.execute_plan(plan, "Context", None).await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].output.contains("Access Denied"));
-    }
-
-    #[tokio::test]
-    async fn test_agent_native_web_search() {
-        let mock_provider = MockProvider::new();
-        let memory = Arc::new(MemoryStore::default());
-        let agent = AgentManager::new(Arc::new(mock_provider), memory);
-        
-        let plan = crate::agent::planner::AgentPlan {
-            thought: None,
-            tasks: vec![
-                crate::agent::planner::AgentTask {
-                    task_id: "1".into(),
-                    tool_type: "native_web_search".into(),
-                    description: "Rust programming language".into(),
-                    depends_on: vec![],
-                }
-            ],
-        };
-
-        let results = agent.execute_plan(plan, "Context", None).await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].output.contains("SEARCH RESULTS for"));
-    }
-}
+mod tests;

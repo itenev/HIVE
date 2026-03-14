@@ -77,4 +77,32 @@ mod tests {
         // Private CANNOT read other's Private
         assert!(!priv_alice.can_read(&priv_bob));
     }
+
+    #[test]
+    fn test_scope_serde_and_derives() {
+        let pub_scope = Scope::Public { channel_id: "c1".to_string(), user_id: "u1".to_string() };
+        let priv_scope = Scope::Private { user_id: "u1".to_string() };
+        
+        // Test clones and derives to hit code coverage for generated code
+        assert_eq!(pub_scope, pub_scope.clone());
+        assert_ne!(pub_scope, priv_scope);
+
+        let json = serde_json::to_string(&pub_scope).unwrap();
+        let decoded: Scope = serde_json::from_str(&json).unwrap();
+        assert_eq!(pub_scope, decoded);
+
+        let json_priv = serde_json::to_string(&priv_scope).unwrap();
+        let decoded_priv: Scope = serde_json::from_str(&json_priv).unwrap();
+        assert_eq!(priv_scope, decoded_priv);
+    }
+
+    #[test]
+    fn test_scope_cross_boundaries() {
+        let pub_scope = Scope::Public { channel_id: "c1".to_string(), user_id: "alice".to_string() };
+        let priv_scope = Scope::Private { user_id: "alice".to_string() };
+
+        // Test the structural match branches (Public/Private and Private/Public) explicitly again to be safe
+        assert_eq!(pub_scope.can_read(&priv_scope), false);
+        assert_eq!(priv_scope.can_read(&pub_scope), false);
+    }
 }

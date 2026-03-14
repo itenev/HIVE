@@ -51,7 +51,10 @@ impl WorkingMemory {
     fn get_transcript_path(&self, scope: &Scope) -> PathBuf {
         let mut path = self.get_memory_dir();
         match scope {
-            Scope::Public { channel_id, .. } => path.push(format!("public_{}", channel_id)),
+            Scope::Public { channel_id, user_id } => {
+                path.push(format!("public_{}", channel_id));
+                path.push(user_id);
+            }
             Scope::Private { user_id } => path.push(format!("private_{}", user_id)),
         }
         path.push("transcript.jsonl");
@@ -95,11 +98,25 @@ impl WorkingMemory {
                 history.push(e.clone());
             }
         }
+
+        // HARD CAP: Retain only the most recent 40 messages (20 conversational turns).
+        // Prevents unbounded System Prompt growth, KV Cache explosion, and massive latency creep.
+        // Data is not permanently lost; `memory::autosave` and `memory::timeline` retain full persistence.
+        if history.len() > 40 {
+            let start = history.len() - 40;
+            history = history[start..].to_vec();
+        }
+
         history
     }
     
     pub async fn current_tokens(&self) -> usize {
         *self.token_count.read().await
+    }
+
+    /// Returns a clone of all events in working memory (scope-unfiltered).
+    pub async fn get_all_events(&self) -> Vec<Event> {
+        self.events.read().await.clone()
     }
     
     pub fn max_tokens(&self) -> usize {
@@ -317,5 +334,31 @@ mod tests {
         // This should safely hit the `Err(_) => return` at line 107
         mem.load_persisted().await;
         assert_eq!(mem.current_tokens().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_working_memory_40_msg_cap() {
+        let test_dir = std::env::temp_dir().join(format!("hive_working_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mem = WorkingMemory::new(Some(test_dir.clone()));
+        let scope = Scope::Private { user_id: "capper".into() };
+
+        // Add 50 events
+        for i in 0..50 {
+            mem.add_event(Event {
+                platform: "test".into(),
+                scope: scope.clone(),
+                author_name: format!("User{}", i),
+                author_id: "test".into(),
+                content: "ping".into(),
+            }).await;
+        }
+
+        // Fetch history, should be capped at 40
+        let hist = mem.get_history(&scope).await;
+        assert_eq!(hist.len(), 40);
+        // The first 10 should be truncated, so the earliest we see is User10
+        assert_eq!(hist[0].author_name, "User10");
+
+        let _ = tokio::fs::remove_dir_all(&test_dir).await;
     }
 }

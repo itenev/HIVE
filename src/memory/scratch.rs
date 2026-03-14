@@ -29,7 +29,10 @@ impl Scratchpad {
     fn get_scratchpad_path(&self, scope: &Scope) -> PathBuf {
         let mut path = self.base_dir.clone();
         match scope {
-            Scope::Public { channel_id, .. } => path.push(format!("public_{}", channel_id)),
+            Scope::Public { channel_id, user_id } => {
+                path.push(format!("public_{}", channel_id));
+                path.push(user_id);
+            }
             Scope::Private { user_id } => path.push(format!("private_{}", user_id)),
         }
         path.push("scratch");

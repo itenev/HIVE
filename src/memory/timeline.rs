@@ -45,7 +45,10 @@ impl TimelineManager {
     fn get_timeline_path(&self, scope: &Scope) -> PathBuf {
         let mut path = self.get_memory_dir();
         match scope {
-            Scope::Public { channel_id, .. } => path.push(format!("public_{}", channel_id)),
+            Scope::Public { channel_id, user_id } => {
+                path.push(format!("public_{}", channel_id));
+                path.push(user_id);
+            }
             Scope::Private { user_id } => path.push(format!("private_{}", user_id)),
         }
         path.push("timeline.jsonl");
@@ -77,6 +80,11 @@ impl TimelineManager {
             return Ok(Vec::new());
         }
         tokio::fs::read(path).await
+    }
+
+    pub async fn get_formatted_hud(&self) -> String {
+        let len = self.events.read().await.len();
+        format!("### Temporal Awareness\nCurrent System Time: {}\nTimeline Event Depth: {}", chrono::Utc::now().to_rfc3339(), len)
     }
 }
 
@@ -200,5 +208,29 @@ mod tests {
 
         let parsed_event2: Event = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(parsed_event2.content, "Msg2");
+    }
+
+    #[tokio::test]
+    async fn test_timeline_read_missing_file_and_hud() {
+        let test_dir = std::env::temp_dir().join(format!("hive_timeline_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let manager = TimelineManager::new(Some(test_dir.clone()));
+        let scope = Scope::Private { user_id: "missing".into() };
+
+        let data = manager.read_timeline(&scope).await.unwrap();
+        assert!(data.is_empty());
+
+        let hud = manager.get_formatted_hud().await;
+        assert!(hud.contains("Timeline Event Depth: 0"));
+
+        manager.append_event(&Event {
+            platform: "test".into(),
+            scope: scope.clone(),
+            author_name: "test".into(),
+            author_id: "test".into(),
+            content: "test".into(),
+        }).await;
+
+        let hud2 = manager.get_formatted_hud().await;
+        assert!(hud2.contains("Timeline Event Depth: 1"));
     }
 }

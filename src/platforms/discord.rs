@@ -14,6 +14,9 @@ use super::{Platform, PlatformError};
 struct Handler {
     event_sender: Sender<Event>,
     bot_user_id: Mutex<Option<serenity::model::id::UserId>>,
+    active_telemetry: Arc<Mutex<std::collections::HashMap<u64, tokio::sync::watch::Sender<Option<String>>>>>,
+    tts_cache: Arc<Mutex<std::collections::HashMap<u64, String>>>,
+    continue_responses: Arc<Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<bool>>>>,
 }
 
 #[async_trait]
@@ -35,7 +38,7 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        if let Interaction::Command(command) = interaction {
+        if let Interaction::Command(command) = &interaction {
             if command.data.name.as_str() == "clean" || command.data.name.as_str() == "clear" {
                 // Instantly reply so the Discord interaction doesn't fail
                 let data = CreateInteractionResponseMessage::new()
@@ -57,6 +60,103 @@ impl EventHandler for Handler {
                 };
 
                 let _ = self.event_sender.send(ev).await;
+            }
+        }
+
+        if let Interaction::Component(component) = &interaction {
+            if component.data.custom_id == "tts_generate" {
+                // Check if message already has an audio attachment
+                let has_audio = component.message.attachments.iter().any(|a| a.filename.ends_with(".wav") || a.filename.ends_with(".mp3"));
+
+                if has_audio {
+                    let data = CreateInteractionResponseMessage::new()
+                        .content("🔇 TTS Audio removed.")
+                        .ephemeral(true);
+                    let builder = CreateInteractionResponse::Message(data);
+                    let _ = component.create_response(&ctx.http, builder).await;
+
+                    let edit = serenity::builder::EditMessage::new()
+                        .attachments(serenity::builder::EditAttachments::new());
+                    let _ = component.message.clone().edit(&ctx.http, edit).await;
+                } else {
+                    let data = CreateInteractionResponseMessage::new()
+                        .content("🔊 Requesting local TTS generation...")
+                        .ephemeral(true);
+                    let builder = CreateInteractionResponse::Message(data);
+                    let _ = component.create_response(&ctx.http, builder).await;
+
+                    let mut text_to_speak = component.message.content.clone();
+                    {
+                        let cache = self.tts_cache.lock().await;
+                        if let Some(full_text) = cache.get(&component.message.id.get()) {
+                            text_to_speak = full_text.clone();
+                        }
+                    }
+
+                    // Strip markdown ATTACH tags from spoken text
+                    while let Some(start_idx) = text_to_speak.find("[ATTACH_IMAGE](") {
+                        if let Some(end_idx) = text_to_speak[start_idx..].find(")") {
+                            let before = &text_to_speak[..start_idx];
+                            let after = &text_to_speak[start_idx + end_idx + 1..];
+                            text_to_speak = format!("{}{}", before, after);
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let http = ctx.http.clone();
+                    let mut msg = component.message.clone();
+
+                    if text_to_speak.trim().is_empty() {
+                        return;
+                    }
+
+                    tokio::spawn(async move {
+                        if let Ok(tts) = crate::voice::kokoro::KokoroTTS::new().await {
+                            if let Ok(path) = tts.get_audio_path(&text_to_speak).await {
+                                if let Ok(attachment) = serenity::builder::CreateAttachment::path(&path).await {
+                                    let edit = serenity::builder::EditMessage::new()
+                                        .attachments(serenity::builder::EditAttachments::new().add(attachment));
+                                    let _ = msg.edit(&http, edit).await;
+                                }
+                            } else {
+                                // Silent fallback on failure
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        if let Interaction::Component(component) = &interaction {
+            let cid = &component.data.custom_id;
+            if cid == "continue_yes" || cid == "continue_no" {
+                let user_wants_continue = cid == "continue_yes";
+                let btn_label = if user_wants_continue { "✅ Continuing..." } else { "🛑 Wrapping up..." };
+                let data = CreateInteractionResponseMessage::new()
+                    .content(btn_label)
+                    .ephemeral(true);
+                let builder = CreateInteractionResponse::Message(data);
+                let _ = component.create_response(&ctx.http, builder).await;
+
+                // Resolve the oneshot
+                let msg_id = component.message.id.get();
+                let mut map = self.continue_responses.lock().await;
+                if let Some(tx) = map.remove(&msg_id) {
+                    let _ = tx.send(user_wants_continue);
+                }
+
+                // Edit the checkpoint message to show the choice
+                let edit_text = if user_wants_continue {
+                    "🐝 **Checkpoint reached** — ✅ User chose to continue."
+                } else {
+                    "🐝 **Checkpoint reached** — 🛑 User chose to wrap up."
+                };
+                let edit = serenity::builder::EditMessage::new()
+                    .content(edit_text)
+                    .components(vec![]);
+                let _ = component.message.clone().edit(&ctx.http, edit).await;
+                return;
             }
         }
     }
@@ -99,24 +199,49 @@ impl EventHandler for Handler {
         // Create cognition tracker embed (ErnOS CognitionTracker pattern)
         let embed = serenity::builder::CreateEmbed::new()
             .description("```\n⏳ Processing...\n```")
+            .footer(serenity::builder::CreateEmbedFooter::new("🐝 Analyzing..."))
             .color(0x5865F2);
             
         let builder = serenity::builder::CreateMessage::new().reference_message(&msg).embed(embed);
         let thinking_msg_id = if let Ok(sent_msg) = msg.channel_id.send_message(&ctx.http, builder).await {
-            Some(sent_msg.id.get().to_string())
+            let msg_id_u64 = sent_msg.id.get();
+            let (tx, rx) = tokio::sync::watch::channel(Some("⏳ Processing...".to_string()));
+            {
+                let mut map = self.active_telemetry.lock().await;
+                map.insert(msg_id_u64, tx);
+            }
+            let http_clone = ctx.http.clone();
+            let channel_id_clone = msg.channel_id;
+
+            super::telemetry::spawn_telemetry_loop(http_clone, channel_id_clone, msg_id_u64, rx);
+
+            Some(msg_id_u64.to_string())
         } else {
             None
         };
 
-        // Attach platform metadata containing the channel & thinking msg.
-        let platform_id = format!("discord:{}:{}", msg.channel_id.get(), thinking_msg_id.unwrap_or_default());
+        // Attach platform metadata containing the channel, thinking msg, and source user msg.
+        let platform_id = format!("discord:{}:{}:{}", msg.channel_id.get(), thinking_msg_id.unwrap_or_default(), msg.id.get());
+
+        // Capture attachment metadata only — no downloads, no disk writes.
+        // Apis can use the `read_attachment` tool to fetch content on-demand (in-memory).
+        let mut enriched_content = msg.content.clone();
+        if !msg.attachments.is_empty() {
+            for att in &msg.attachments {
+                let content_type = att.content_type.clone().unwrap_or_else(|| "unknown".to_string());
+                enriched_content.push_str(&format!(
+                    "\n\n[USER_ATTACHMENT: {} | type: {} | size: {} bytes | url: {}]",
+                    att.filename, content_type, att.size, att.url
+                ));
+            }
+        }
 
         let ev = Event {
             platform: platform_id,
             scope,
             author_name: msg.author.name.clone(),
             author_id: msg.author.id.get().to_string(),
-            content: msg.content.clone(),
+            content: enriched_content,
         };
 
         let _ = self.event_sender.send(ev).await;
@@ -126,13 +251,19 @@ impl EventHandler for Handler {
 pub struct DiscordPlatform {
     token: String,
     http: Mutex<Option<Arc<serenity::http::Http>>>,
+    active_telemetry: Arc<Mutex<std::collections::HashMap<u64, tokio::sync::watch::Sender<Option<String>>>>>,
+    tts_cache: Arc<Mutex<std::collections::HashMap<u64, String>>>,
+    continue_responses: Arc<Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<bool>>>>,
 }
 
 impl DiscordPlatform {
     pub fn new(token: String) -> Self {
         Self { 
             token,
-            http: Mutex::new(None)
+            http: Mutex::new(None),
+            active_telemetry: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            tts_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            continue_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 }
@@ -149,6 +280,9 @@ impl Platform for DiscordPlatform {
         let handler = Handler {
             event_sender,
             bot_user_id: Mutex::new(None),
+            active_telemetry: self.active_telemetry.clone(),
+            tts_cache: self.tts_cache.clone(),
+            continue_responses: self.continue_responses.clone(),
         };
 
         let mut client = Client::builder(&self.token, intents)
@@ -177,7 +311,7 @@ impl Platform for DiscordPlatform {
         }
 
         let channel_id: u64 = parts[1].parse().unwrap_or(0);
-        let thinking_msg_id: u64 = if parts.len() == 3 { parts[2].parse().unwrap_or(0) } else { 0 };
+        let thinking_msg_id: u64 = if parts.len() >= 3 { parts[2].parse().unwrap_or(0) } else { 0 };
 
         let http_lock = self.http.lock().await;
         let http = http_lock.as_ref().ok_or(PlatformError::Other("Discord HTTP client not initialized".into()))?;
@@ -185,19 +319,11 @@ impl Platform for DiscordPlatform {
         let channel = serenity::model::id::ChannelId::new(channel_id);
 
         if response.is_telemetry {
-            // TELEMETRY: Edit the cognition tracker embed in-place (ErnOS CognitionTracker pattern)
             if thinking_msg_id > 0 {
-                // Determine color: blurple for processing, green for complete
-                let is_complete = response.text.starts_with("✅");
-                let color = if is_complete { 0x57F287u32 } else { 0x5865F2u32 };
-
-                let embed = serenity::builder::CreateEmbed::new()
-                    .description(format!("```\n{}\n```", response.text))
-                    .color(color);
-                let edit_builder = serenity::builder::EditMessage::new().embed(embed);
-                let _ = channel
-                    .edit_message(http, serenity::model::id::MessageId::new(thinking_msg_id), edit_builder)
-                    .await;
+                let map = self.active_telemetry.lock().await;
+                if let Some(tx) = map.get(&thinking_msg_id) {
+                    let _ = tx.send(Some(response.text.clone()));
+                }
             }
         } else {
             // Discord limits messages to 2000 characters. We must chunk the final response.
@@ -212,11 +338,38 @@ impl Platform for DiscordPlatform {
                 current_pos = end_pos;
             }
 
-            for chunk_text in chunks {
-                let builder = serenity::builder::CreateMessage::new().content(chunk_text);
-                if let Err(e) = channel.send_message(http, builder).await {
-                    eprintln!("[Discord Platform] Error sending response chunk: {:?}", e);
+            let mut final_msg_id = None;
+            for (i, chunk_text) in chunks.iter().enumerate() {
+                let mut parsed_text = chunk_text.to_string();
+                let attachments = super::attachments::extract_attachments(&mut parsed_text).await;
+
+                let mut builder = serenity::builder::CreateMessage::new().content(parsed_text.trim());
+                for att in attachments {
+                    builder = builder.add_file(att);
                 }
+                
+                // Add the TTS button exclusively to the final message chunk
+                if i == chunks.len() - 1 && !response.is_telemetry {
+                    let btn = serenity::builder::CreateButton::new("tts_generate")
+                        .label("🔊 Speak")
+                        .style(serenity::model::application::ButtonStyle::Secondary);
+                    let row = serenity::builder::CreateActionRow::Buttons(vec![btn]);
+                    builder = builder.components(vec![row]);
+                }
+
+                match channel.send_message(http, builder).await {
+                    Ok(msg) => {
+                        if i == chunks.len() - 1 {
+                            final_msg_id = Some(msg.id.get());
+                        }
+                    }
+                    Err(e) => eprintln!("[Discord Platform] Error sending response chunk: {:?}", e),
+                }
+            }
+
+            if let Some(msg_id) = final_msg_id {
+                let mut cache = self.tts_cache.lock().await;
+                cache.insert(msg_id, response.text.clone());
             }
         }
         
@@ -225,6 +378,82 @@ impl Platform for DiscordPlatform {
         let _ = channel.broadcast_typing(http).await;
 
         Ok(())
+    }
+
+    #[cfg(not(tarpaulin_include))]
+    async fn react(&self, channel_id: u64, message_id: u64, emoji: &str) -> Result<(), PlatformError> {
+        let http_lock = self.http.lock().await;
+        let http = http_lock.as_ref().ok_or(PlatformError::Other("Discord HTTP client not initialized".into()))?;
+        
+        let channel = serenity::model::id::ChannelId::new(channel_id);
+        let msg_id = serenity::model::id::MessageId::new(message_id);
+        let reaction = serenity::model::channel::ReactionType::Unicode(emoji.to_string());
+        
+        channel.create_reaction(http, msg_id, reaction)
+            .await
+            .map_err(|e| PlatformError::Other(format!("Failed to add reaction: {}", e)))?;
+        
+        println!("[Discord] ✅ Added reaction {} to message {} in channel {}", emoji, message_id, channel_id);
+        Ok(())
+    }
+
+    #[cfg(not(tarpaulin_include))]
+    async fn ask_continue(&self, channel_id: u64, turn: usize) -> bool {
+        let http_lock = self.http.lock().await;
+        let http = match http_lock.as_ref() {
+            Some(h) => h.clone(),
+            None => return true,
+        };
+        drop(http_lock);
+
+        let channel = serenity::model::id::ChannelId::new(channel_id);
+
+        let yes_btn = serenity::builder::CreateButton::new("continue_yes")
+            .label("✅ Continue")
+            .style(serenity::model::application::ButtonStyle::Success);
+        let no_btn = serenity::builder::CreateButton::new("continue_no")
+            .label("🛑 Wrap Up")
+            .style(serenity::model::application::ButtonStyle::Danger);
+        let row = serenity::builder::CreateActionRow::Buttons(vec![yes_btn, no_btn]);
+
+        let builder = serenity::builder::CreateMessage::new()
+            .content(format!("🐝 **Checkpoint — Turn {}**\nI've been working for {} turns. Should I keep going, or wrap up and respond with what I have?", turn, turn))
+            .components(vec![row]);
+
+        match channel.send_message(&http, builder).await {
+            Ok(sent) => {
+                let msg_id = sent.id.get();
+                let (tx, rx) = tokio::sync::oneshot::channel();
+
+                {
+                    let mut map = self.continue_responses.lock().await;
+                    map.insert(msg_id, tx);
+                }
+
+                println!("[CHECKPOINT] 🐝 Sent continue prompt at turn {} (msg {})", turn, msg_id);
+
+                // Wait for user response with 5 minute timeout
+                match tokio::time::timeout(tokio::time::Duration::from_secs(300), rx).await {
+                    Ok(Ok(response)) => {
+                        println!("[CHECKPOINT] User responded: {}", if response { "continue" } else { "wrap up" });
+                        response
+                    }
+                    _ => {
+                        // Timeout or channel error — default to wrapping up
+                        println!("[CHECKPOINT] ⏰ Timed out waiting for user. Wrapping up.");
+                        let edit = serenity::builder::EditMessage::new()
+                            .content(format!("🐝 **Checkpoint — Turn {}** — ⏰ No response, wrapping up.", turn))
+                            .components(vec![]);
+                        let _ = channel.edit_message(&http, serenity::model::id::MessageId::new(msg_id), edit).await;
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[CHECKPOINT] Failed to send continue prompt: {}", e);
+                true // Can't ask, just continue
+            }
+        }
     }
 }
 

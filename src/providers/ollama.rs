@@ -11,6 +11,8 @@ use super::{Provider, ProviderError};
 struct OllamaMessage {
     role: String,
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -53,14 +55,12 @@ impl Provider for OllamaProvider {
         agent_context: &str,
         telemetry_tx: Option<mpsc::Sender<String>>,
     ) -> Result<String, ProviderError> {
-        let mut messages = vec![
-            OllamaMessage {
-                role: "system".to_string(),
-                content: system_prompt.to_string(),
-            }
-        ];
+        let mut messages = Vec::new();
 
-        // Format the securely-scoped history
+        // Format the securely-scoped history FIRST
+        // Individual messages are capped to prevent one massive response from bloating all subsequent calls.
+        // Full messages remain in working memory & disk — only the LLM prompt copy is capped.
+        const HISTORY_MSG_CAP: usize = 2000;
         for event in history {
             let role = if event.author_name == "Apis" {
                 "assistant"
@@ -87,11 +87,28 @@ impl Provider for OllamaProvider {
                 }
             };
 
+            // Cap oversized history messages to prevent prompt bloat from prior mega-responses.
+            let capped_content = if content.len() > HISTORY_MSG_CAP {
+                let truncated: String = content.chars().take(HISTORY_MSG_CAP).collect();
+                format!("{}...\n[Message truncated from {} to {} chars for context efficiency. Full version retained in memory.]", truncated, content.len(), HISTORY_MSG_CAP)
+            } else {
+                content
+            };
+
             messages.push(OllamaMessage {
                 role: role.to_string(),
-                content,
+                content: capped_content,
+                images: None,
             });
         }
+
+        // Pinned System Prompt: Load the strict operational rules AFTER the history
+        // to combat LLM "lost in the middle" recency bias on massive context windows.
+        messages.push(OllamaMessage {
+            role: "system".to_string(),
+            content: system_prompt.to_string(),
+            images: None,
+        });
 
         let mut final_user_message = format!("{}: {}", new_event.author_name, new_event.content);
         if !agent_context.is_empty() {
@@ -99,10 +116,34 @@ impl Provider for OllamaProvider {
             final_user_message.push_str(agent_context);
         }
 
+        // Native Vision Support: Extract image URLs from [USER_ATTACHMENT] tags and fetch them
+        let mut b64_images = Vec::new();
+        let attachment_blocks: Vec<&str> = final_user_message.split("[USER_ATTACHMENT:").skip(1).collect();
+        for block in attachment_blocks {
+            if let Some(end_idx) = block.find(']') {
+                let tag_content = &block[..end_idx];
+                let is_image = tag_content.contains("type: image/");
+                if is_image {
+                    if let Some(url_start) = tag_content.find("url: ") {
+                        let url = tag_content[url_start + 5..].trim();
+                        if let Ok(resp) = self.client.get(url).send().await {
+                            if let Ok(bytes) = resp.bytes().await {
+                                use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                b64_images.push(STANDARD.encode(&bytes));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let images_opt = if b64_images.is_empty() { None } else { Some(b64_images) };
+
         // Add the current triggering event
         messages.push(OllamaMessage {
             role: "user".to_string(),
             content: final_user_message,
+            images: images_opt,
         });
 
         let payload = OllamaRequest {
@@ -123,8 +164,14 @@ impl Provider for OllamaProvider {
             return Err(ProviderError::ParseError(format!("Ollama error {}: {}", status, text)));
         }
 
+        let mut first_token_received = false;
         let mut full_response = String::new();
         let mut raw_buffer = String::new();
+        let mut final_prompt_tokens = 0;
+        let mut final_eval_tokens = 0;
+        let mut ttft_duration = tokio::time::Duration::from_secs(0);
+        let prompt_bytes: usize = payload.messages.iter().map(|m| m.content.len()).sum();
+        let start_time = tokio::time::Instant::now();
 
         while let Some(chunk) = res.chunk().await.map_err(Self::map_chunk_err)? {
             let chunk_str = String::from_utf8_lossy(&chunk);
@@ -155,13 +202,36 @@ impl Provider for OllamaProvider {
                     }
 
                     if parsed.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        final_prompt_tokens = parsed.get("prompt_eval_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                        final_eval_tokens = parsed.get("eval_count").and_then(|v| v.as_u64()).unwrap_or(0);
                         break;
+                    }
+
+                    if !first_token_received && parsed.get("message").is_some() {
+                        ttft_duration = start_time.elapsed();
+                        first_token_received = true;
                     }
                 } else {
                     return Err(ProviderError::ParseError("Failed to parse JSON stream chunk".into()));
                 }
             }
         }
+
+        let total_time = start_time.elapsed();
+        let metrics = crate::engine::telemetry::LatencyMetrics {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            model: self.model.clone(),
+            prompt_bytes,
+            history_len: history.len(),
+            ttft_ms: ttft_duration.as_millis() as u64,
+            total_ms: total_time.as_millis() as u64,
+            prompt_tokens: final_prompt_tokens,
+            eval_tokens: final_eval_tokens,
+        };
+
+        tokio::spawn(async move {
+            crate::engine::telemetry::log_latency(metrics).await;
+        });
 
         Ok(full_response.trim().to_string())
     }

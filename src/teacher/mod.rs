@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_extract_tools_with_tools() {
-        let ctx = "Step 1: planning\nTool: researcher\nStep 2: execute\ntool_type: native_codebase_list\nSome other line";
+        let ctx = "Step 1: planning\nTool: researcher\nStep 2: execute\ntool_type: codebase_list\nSome other line";
         let tools = Teacher::extract_tools(ctx);
         assert_eq!(tools.len(), 2);
         assert!(tools[0].contains("Tool:"));
@@ -512,7 +512,6 @@ mod tests {
         assert!(teacher.get_archive_dir().exists());
     }
 
-    #[test]
     #[test]
     fn test_constants() {
         assert_eq!(GOLDEN_THRESHOLD, 5);
