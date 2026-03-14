@@ -58,7 +58,7 @@ impl AgentManager {
         };
         let emoji_react = ToolTemplate {
             name: "emoji_react".into(),
-            system_prompt: "React to the user's Discord message with a native emoji reaction. This attaches the emoji directly to the message the user sent, visible to everyone in the channel. Description format: 'emoji:[unicode emoji character]' e.g. 'emoji:[👍]' or 'emoji:[🐝]'".into(),
+            system_prompt: "React to the user's Discord message with a native emoji reaction. Use this PROACTIVELY and GENUINELY to show context-aware emotion (e.g. laughing at a joke, celebrating a win) alongside your actions. This attaches the emoji directly to the message. Description format: 'emoji:[unicode emoji character]' e.g. 'emoji:[👍]' or 'emoji:[💀]'".into(),
             tools: vec![],
         };
 
