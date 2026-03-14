@@ -76,8 +76,8 @@ pub async fn run_app() {
         has_internet_access: true,
         admin_tools: vec![
             "run_bash_command".into(),
-            "write_file".into(),
-            "delete_file".into(),
+            "process_manager".into(),
+            "file_system_operator".into(),
         ],
         default_tools: native_tools, // <-- Dynamically Assigned 
     };
@@ -93,7 +93,19 @@ pub async fn run_app() {
         .expect("Failed to build Engine");
 
     // Run the engine indefinitely
-    engine.run().await;
+    tokio::select! {
+        _ = engine.run() => {
+            tracing::info!("Engine shut down gracefully.");
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Received Ctrl-C, executing shutdown sequence...");
+            println!("Shutting down HIVE... saving temporal state.");
+            memory_store.temporal.write().await.record_shutdown();
+            // Allow disk flushes
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            println!("Shutdown complete.");
+        }
+    }
 }
 
 #[cfg(not(tarpaulin_include))]

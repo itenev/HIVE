@@ -8,7 +8,7 @@ The following prompt is designed to push the HIVE Agent stack to its absolute li
 > 1. Use `web_search` to look up "Latest breakthroughs in Solid State Batteries 2026".
 > 2. Use `codebase_list` to fetch the root directory structure of your environment.
 > 3. Use `codebase_read` to attempt reading `../../../etc/hosts` to verify path traversal security blocks you.
-> 4. Use `manage_user_preferences` to add a new hobby for me: "Underwater Basket Weaving".
+> 4. Use `manage_user_preferences` to add a new entry for me: "prefers Concice warm convonsational replies".
 > 
 > **Turn 2: Analysis, Internal Sandbox & Creation**
 > 5. Use `researcher` to analyze the previous search results and summarize the key players.
@@ -28,11 +28,17 @@ The following prompt is designed to push the HIVE Agent stack to its absolute li
 > 17. Use `read_attachment` with a fake Discord CDN URL to verify it correctly rejects invalid URLs.
 > 18. Use `autonomy_activity` with `action:[summary]` to read your autonomous activity history.
 > 
-> **Turn 4: Final Verification, Document Composition & Synthesis**
-> 19. Use `review_reasoning` to review your reasoning trace from 1 turn ago to confirm coherent thought process.
-> 20. Use `file_writer` to draft a professional PDF document titled "Master Gauntlet v2 Report" summarizing your success across all turns.
-> 21. Use `synthesizer` to fan-in all observations, parse the results, and generate the final response.
-> 22. Your final response MUST end with the following formatted report card. For each tool, write PASS if it executed successfully or FAIL with a reason:
+> **Turn 4: Turing Daemons & Host Admin Rights**
+> 19. Use `process_manager` with `action:[daemon]` to start a background daemon that echoes the date to a log file every 2 seconds indefinitely (`while true; do date; sleep 2; done`).
+> 20. Use `file_system_operator` with `action:[write]` to create `gauntlet_admin.txt` containing "Host secured." in the project root.
+> 21. Use `run_bash_command` to cat `gauntlet_admin.txt`, verifying your host access.
+> 22. Use `process_manager` with `action:[list]` to find your daemon PID, then use `action:[read]` to read its logs, then `action:[kill]` to terminate it.
+> 
+> **Turn 5: Final Verification, Document Composition & Synthesis**
+> 23. Use `review_reasoning` to review your reasoning trace from 1 turn ago to confirm coherent thought process.
+> 24. Use `file_writer` to draft a professional PDF document titled "Master Gauntlet v2 Report" summarizing your success across all turns.
+> 25. Use `synthesizer` to fan-in all observations, parse the results, and generate the final response.
+> 26. Your final response MUST end with the following formatted report card. For each tool, write PASS if it executed successfully or FAIL with a reason:
 > 
 > ```
 > ╔══════════════════════════════════════════════════════╗
@@ -58,9 +64,12 @@ The following prompt is designed to push the HIVE Agent stack to its absolute li
 > ║ read_attachment           │ PASS / FAIL             ║
 > ║ autonomy_activity         │ PASS / FAIL             ║
 > ║ file_writer               │ PASS / FAIL             ║
+> ║ process_manager           │ PASS / FAIL (or ADMIN)  ║
+> ║ file_system_operator      │ PASS / FAIL (or ADMIN)  ║
+> ║ run_bash_command          │ PASS / FAIL (or ADMIN)  ║
 > ║ synthesizer               │ PASS / FAIL             ║
 > ╠══════════════════════════════════════════════════════╣
-> ║ TOTAL                     │ XX / 19 PASSED          ║
+> ║ TOTAL                     │ XX / 22 PASSED          ║
 > ╚══════════════════════════════════════════════════════╝
 > ```
 > 

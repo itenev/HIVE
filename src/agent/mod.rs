@@ -14,6 +14,7 @@ pub mod synthesis_drone;
 pub mod outreach;
 pub mod skills;
 pub mod routines;
+pub mod process_manager;
 pub mod lessons_drone;
 pub mod turing_drone;
 pub mod web_drone;
@@ -22,6 +23,10 @@ pub mod tts_drone;
 pub mod file_reader;
 pub mod file_writer;
 pub mod registry;
+pub mod timeline_drone;
+pub mod scratchpad_drone;
+pub mod synaptic_drone;
+pub mod core_memory_drone;
 
 pub struct AgentManager {
     registry: HashMap<String, ToolTemplate>,
@@ -92,7 +97,11 @@ impl AgentManager {
             tools: vec![],
         };
 
-        let store_lesson = ToolTemplate { name: "store_lesson".into(), system_prompt: "Store an important behavioral or factual lesson you have learned. Format: 'lesson:[text] keywords:[comma separated] confidence:[0.0-1.0]'".into(), tools: vec![] };
+        let manage_lessons = ToolTemplate { name: "manage_lessons".into(), system_prompt: "Manage important behavioral or factual lessons. 'action:[store] lesson:[text] keywords:[comma separated] confidence:[0.0-1.0]' — write a lesson. 'action:[read]' — list all lessons scoped here. 'action:[search] query:[text]' — filter lessons.".into(), tools: vec![] };
+        let search_timeline = ToolTemplate { name: "search_timeline".into(), system_prompt: "Deep search the infinite long-term episodic memory logs for this channel/user. 'action:[search] query:[text] limit:[N]' — search backwards through time.".into(), tools: vec![] };
+        let manage_scratchpad = ToolTemplate { name: "manage_scratchpad".into(), system_prompt: "Persistent VRAM for notes/variables scoped to this chat. 'action:[read]' — view the scratchpad. 'action:[write] content:[...]' — overwrite entirely. 'action:[append] content:[...]' — add to end. 'action:[clear]' — wipe.".into(), tools: vec![] };
+        let operate_synaptic_graph = ToolTemplate { name: "operate_synaptic_graph".into(), system_prompt: "Neo4j Knowledge Graph for core truths and relationships. 'action:[store] concept:[A] data:[B]' — store belief. 'action:[search] concept:[A]' — retrieve mapping. 'action:[beliefs]' — dump core system beliefs.".into(), tools: vec![] };
+        let read_core_memory = ToolTemplate { name: "read_core_memory".into(), system_prompt: "System introspection. 'action:[temporal]' — check boot time, total uptime, turn counts. 'action:[tokens]' — check working memory context size / token pressure limit.".into(), tools: vec![] };
         let manage_skill = ToolTemplate { name: "manage_skill".into(), system_prompt: "[ADMIN ONLY] Create, list, or execute custom Python or Bash scripts. Stored and scoped to the current user/channel. Description format: 'action:[create/list/execute] name:[skill_name.py] content:[RAW CODE]'".into(), tools: vec![] };
         let manage_routine = ToolTemplate { name: "manage_routine".into(), system_prompt: "Create, read, or list OpenClaw-style declarative markdown Routines. Routines instruct you on how to solve complex tasks. Description format: 'action:[create/read/list] name:[routine.md] content:[RAW MARKDOWN]'".into(), tools: vec![] };
         let synthesizer = ToolTemplate { name: "synthesizer".into(), system_prompt: "Fan-in aggregator drone. Reads all DRONE OUTPUT blocks already in context and condenses them into a single compact synthesis. Use this as the final task in a multi-wave plan when you need to merge results before replying. Description: plain English instruction on what to synthesise, e.g. 'Summarise the web and memory results into 3 key findings.'. CRITICAL INSTRUCTION: If any drone output includes a tag like [ATTACH_IMAGE](...), [ATTACH_FILE](...), or [ATTACH_AUDIO](...), you MUST include that EXACT tag verbatim in your output so it reaches the user.".into(), tools: vec![] };
@@ -102,7 +111,7 @@ impl AgentManager {
             name: "operate_turing_grid".into(),
             system_prompt: "The 3D Turing Grid is a massive arbitrary personal computation device. \
                 'action:[read]' - read current cell. \
-                'action:[write] format:[text|json|rust|python] content:[data]' - over/write cell. \
+                'action:[write] format:[text|json|rust|python|node|ruby|swift|applescript] content:[data]' - over/write cell. \
                 'action:[move] dx:[X] dy:[Y] dz:[Z]' - safely move the R/W head relative to current. \
                 'action:[scan] radius:[R]' - radar search surrounding cells for data. \
                 'action:[execute]' - route the current cell to the internal ALU kernel.".into(),
@@ -136,13 +145,38 @@ impl AgentManager {
             tools: vec![],
         };
 
+        let run_bash_command = ToolTemplate {
+            name: "run_bash_command".into(),
+            system_prompt: "[ADMIN ONLY] Execute an arbitrary bash command on the host. The planner should put the exact bash string to execute in the description block.".into(),
+            tools: vec![],
+        };
+        let process_manager = ToolTemplate {
+            name: "process_manager".into(),
+            system_prompt: "[ADMIN ONLY] You manage background daemons and execute host bash commands. \
+            'action:[execute] command:[...]' runs normally with a 30s timeout. \
+            'action:[daemon] command:[...]' spawns an indefinite background daemon mapping its PID to memory/daemons/. \
+            'action:[list]' shows active daemons. \
+            'action:[read] pid:[...] lines:[...]' reads daemon logs. \
+            'action:[kill] pid:[...]' terminates daemon.".into(),
+            tools: vec![],
+        };
+        let file_system_operator = ToolTemplate {
+            name: "file_system_operator".into(),
+            system_prompt: "[ADMIN ONLY] You have direct write access to the filesystem. 'action:[write] path:[...] content:[...]' or 'action:[delete] path:[...]' or 'action:[append] path:[...] content:[...]'. Your operations are jailed to the project root unless specified.".into(),
+            tools: vec![],
+        };
+
         registry.insert(researcher.name.clone(), researcher);
         registry.insert(codebase_list.name.clone(), codebase_list);
         registry.insert(codebase_read.name.clone(), codebase_read);
         registry.insert(web_search.name.clone(), web_search);
         registry.insert(manage_user_prefs.name.clone(), manage_user_prefs);
         registry.insert(outreach.name.clone(), outreach);
-        registry.insert(store_lesson.name.clone(), store_lesson);
+        registry.insert(manage_lessons.name.clone(), manage_lessons);
+        registry.insert(search_timeline.name.clone(), search_timeline);
+        registry.insert(manage_scratchpad.name.clone(), manage_scratchpad);
+        registry.insert(operate_synaptic_graph.name.clone(), operate_synaptic_graph);
+        registry.insert(read_core_memory.name.clone(), read_core_memory);
         registry.insert(manage_skill.name.clone(), manage_skill);
         registry.insert(manage_routine.name.clone(), manage_routine);
         registry.insert(synthesizer.name.clone(), synthesizer);
@@ -154,6 +188,9 @@ impl AgentManager {
         registry.insert(file_writer.name.clone(), file_writer);
         registry.insert(read_attachment.name.clone(), read_attachment);
         registry.insert(autonomy_activity.name.clone(), autonomy_activity);
+        registry.insert(run_bash_command.name.clone(), run_bash_command);
+        registry.insert(process_manager.name.clone(), process_manager);
+        registry.insert(file_system_operator.name.clone(), file_system_operator);
 
         // Discord-only tools
         discord_tools.insert(channel_reader.name.clone(), channel_reader);

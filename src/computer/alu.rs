@@ -34,8 +34,85 @@ impl ALU {
         match format.to_lowercase().as_str() {
             "python" | "py" => self.run_script(content, "python3", "py").await,
             "sh" | "bash" => self.run_script(content, "bash", "sh").await,
+            "javascript" | "js" | "node" => self.run_script(content, "node", "js").await,
+            "ruby" | "rb" => self.run_script(content, "ruby", "rb").await,
+            "swift" => self.run_script(content, "swift", "swift").await,
+            "applescript" | "osascript" => self.run_script(content, "osascript", "applescript").await,
+            "perl" | "pl" => self.run_script(content, "perl", "pl").await,
+            "rust" | "rs" => self.run_rust_script(content).await,
             _ => Err(format!("Unsupported execution format: {}", format)),
         }
+    }
+
+    async fn run_rust_script(&self, code: &str) -> Result<String, String> {
+        let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+        let script_id = format!("rust_script_{}.rs", timestamp);
+        let binary_id = format!("rust_bin_{}", timestamp);
+        
+        let script_path = self.runtime_dir.join(&script_id);
+        fs::write(&script_path, code).await.map_err(|e| e.to_string())?;
+
+        // 1. Compile
+        let compile_child = Command::new("rustc")
+            .arg(&script_id)
+            .arg("-o")
+            .arg(&binary_id)
+            .current_dir(&self.runtime_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn rustc: {}", e))?;
+
+        let compile_execution = timeout(Duration::from_secs(10), compile_child.wait_with_output()).await;
+        
+        match compile_execution {
+            Ok(Ok(output)) => {
+                if !output.status.success() {
+                    let _ = fs::remove_file(&script_path).await;
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    return Err(format!("Rust Compilation Failed:\n{}", stderr));
+                }
+            }
+            Ok(Err(e)) => {
+                let _ = fs::remove_file(&script_path).await;
+                return Err(format!("I/O Error waiting for compiler: {}", e));
+            }
+            Err(_) => {
+                let _ = fs::remove_file(&script_path).await;
+                return Err("Rust Compilation Timeout: Exceeded 10 seconds.".to_string());
+            }
+        }
+
+        // 2. Execute
+        let run_child = Command::new(format!("./{}", binary_id))
+            .current_dir(&self.runtime_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("Failed to spawn compiled rust binary: {}", e))?;
+
+        let run_execution = timeout(Duration::from_secs(15), run_child.wait_with_output()).await;
+
+        let result = match run_execution {
+            Ok(Ok(output)) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+                if output.status.success() {
+                    Ok(stdout.trim().to_string())
+                } else {
+                    Err(format!("Execution Failed.\nSTDOUT:\n{}\nSTDERR:\n{}", stdout, stderr))
+                }
+            }
+            Ok(Err(e)) => Err(format!("I/O Error waiting for child: {}", e)),
+            Err(_) => Err("Execution Timeout: Process exceeded 15.0 seconds and was terminated.".to_string()),
+        };
+
+        let _ = fs::remove_file(&script_path).await;
+        let _ = fs::remove_file(self.runtime_dir.join(&binary_id)).await;
+        
+        result
     }
 
     async fn run_script(&self, code: &str, interpreter: &str, ext: &str) -> Result<String, String> {
@@ -53,7 +130,7 @@ impl ALU {
             .spawn()
             .map_err(|e| format!("Failed to spawn {}: {}", interpreter, e))?;
 
-        let execution = timeout(Duration::from_secs(5), child.wait_with_output());
+        let execution = timeout(Duration::from_secs(15), child.wait_with_output());
 
         let result = match execution.await {
             Ok(Ok(output)) => {
@@ -67,7 +144,7 @@ impl ALU {
                 }
             }
             Ok(Err(e)) => Err(format!("I/O Error waiting for child: {}", e)),
-            Err(_) => Err("Execution Timeout: Process exceeded 5.0 seconds and was terminated.".to_string()),
+            Err(_) => Err("Execution Timeout: Process exceeded 15.0 seconds and was terminated.".to_string()),
         };
 
         let _ = fs::remove_file(&script_path).await;

@@ -29,12 +29,18 @@ impl EventHandler for Handler {
 
         // Register Global Slash Commands
         let command_clean = serenity::builder::CreateCommand::new("clean")
-            .description("ADMIN ONLY: Wipes all AI Memory (Factory Reset)");
+            .description("ADMIN ONLY: Wipes all AI Memory (Factory Reset)")
+            .default_member_permissions(serenity::model::Permissions::ADMINISTRATOR);
         let command_clear = serenity::builder::CreateCommand::new("clear")
-            .description("ADMIN ONLY: Wipes all AI Memory (Factory Reset)");
+            .description("ADMIN ONLY: Wipes all AI Memory (Factory Reset)")
+            .default_member_permissions(serenity::model::Permissions::ADMINISTRATOR);
+        let command_sweep = serenity::builder::CreateCommand::new("sweep")
+            .description("ADMIN ONLY: Delete all messages in this channel")
+            .default_member_permissions(serenity::model::Permissions::ADMINISTRATOR);
         
         let _ = serenity::model::application::Command::create_global_command(&ctx.http, command_clean).await;
         let _ = serenity::model::application::Command::create_global_command(&ctx.http, command_clear).await;
+        let _ = serenity::model::application::Command::create_global_command(&ctx.http, command_sweep).await;
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
@@ -60,6 +66,78 @@ impl EventHandler for Handler {
                 };
 
                 let _ = self.event_sender.send(ev).await;
+            } else if command.data.name.as_str() == "sweep" {
+                // Hardcoded Admin ID Check
+                if command.user.id.get() != 1299810741984956449 {
+                    let data = CreateInteractionResponseMessage::new()
+                        .content("❌ You do not have permission to use this command.")
+                        .ephemeral(true);
+                    let builder = CreateInteractionResponse::Message(data);
+                    let _ = command.create_response(&ctx.http, builder).await;
+                    return;
+                }
+
+                // Instantly reply so the Discord interaction doesn't fail
+                let data = CreateInteractionResponseMessage::new()
+                    .content("```\n🧹 Sweeping channel... This may take a while for older messages.\n```")
+                    .ephemeral(true); // Only the admin sees this
+                let builder = CreateInteractionResponse::Message(data);
+                if let Err(why) = command.create_response(&ctx.http, builder).await {
+                    eprintln!("Cannot respond to slash command: {why}");
+                }
+
+                let channel_id = command.channel_id;
+                let http = ctx.http.clone();
+
+                tokio::spawn(async move {
+                    let fourteen_days_ago = chrono::Utc::now() - chrono::Duration::days(14);
+                    
+                    loop {
+                        let messages = match channel_id.messages(&http, serenity::builder::GetMessages::new().limit(100)).await {
+                            Ok(msgs) => msgs,
+                            Err(_) => break,
+                        };
+
+                        if messages.is_empty() {
+                            break;
+                        }
+
+                        let (bulk, single): (Vec<_>, Vec<_>) = messages.into_iter().partition(|m| m.timestamp.with_timezone(&chrono::Utc) > fourteen_days_ago);
+
+                        if !bulk.is_empty() {
+                            if let Err(_) = channel_id.delete_messages(&http, &bulk).await {
+                                // Fallback to single if bulk delete fails for some edge case
+                                let mut handles = Vec::new();
+                                for msg in bulk {
+                                    let http_clone = http.clone();
+                                    handles.push(tokio::spawn(async move {
+                                        let _ = msg.delete(&http_clone).await;
+                                    }));
+                                }
+                                for handle in handles {
+                                    let _ = handle.await;
+                                }
+                            }
+                        }
+
+                        // Concurrently delete older messages (past 14 days)
+                        if !single.is_empty() {
+                            let mut handles = Vec::new();
+                            for msg in single {
+                                let http_clone = http.clone();
+                                handles.push(tokio::spawn(async move {
+                                    let _ = msg.delete(&http_clone).await;
+                                }));
+                            }
+                            for handle in handles {
+                                let _ = handle.await;
+                            }
+                        }
+                        
+                        // Prevent aggressive rate limit tripping
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                });
             }
         }
 
@@ -171,6 +249,56 @@ impl EventHandler for Handler {
             return;
         }
 
+        // Intercept text-based /sweep command (since slash commands take an hour to sync)
+        if msg.content.trim() == "/sweep" {
+            // Hardcoded Admin ID Check
+            if msg.author.id.get() == 1299810741984956449 {
+                let _ = msg.react(&ctx.http, serenity::model::channel::ReactionType::Unicode("🧹".to_string())).await;
+                
+                let channel_id = msg.channel_id;
+            let http = ctx.http.clone();
+
+            tokio::spawn(async move {
+                let fourteen_days_ago = chrono::Utc::now() - chrono::Duration::days(14);
+                loop {
+                    let messages = match channel_id.messages(&http, serenity::builder::GetMessages::new().limit(100)).await {
+                        Ok(msgs) => msgs,
+                        Err(_) => break,
+                    };
+
+                    if messages.is_empty() { break; }
+
+                    let (bulk, single): (Vec<_>, Vec<_>) = messages.into_iter().partition(|m| m.timestamp.with_timezone(&chrono::Utc) > fourteen_days_ago);
+
+                    if !bulk.is_empty() {
+                        if let Err(_) = channel_id.delete_messages(&http, &bulk).await {
+                            for msg in bulk {
+                                let _ = msg.delete(&http).await;
+                            }
+                        }
+                    }
+
+                    if !single.is_empty() {
+                        let mut handles = Vec::new();
+                        for msg in single {
+                            let http_clone = http.clone();
+                            handles.push(tokio::spawn(async move {
+                                let _ = msg.delete(&http_clone).await;
+                            }));
+                        }
+                        for handle in handles {
+                            let _ = handle.await;
+                        }
+                    }
+                    
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+            });
+            // ALWAYS return so the LLM doesn't process it
+            return;
+        }
+        }
+        
         let is_dm = msg.guild_id.is_none();
         let target_channel: u64 = 1479744132904915125;
         let is_target_channel = msg.channel_id.get() == target_channel;

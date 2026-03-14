@@ -169,6 +169,144 @@ pub fn dispatch_native_tool(
         });
         return Some(handle);
     } 
+    if tool_type == "run_bash_command" {
+        let mem_clone = memory.clone();
+        let name_clone = tool_type.to_string();
+        let handle = tokio::spawn(async move {
+            if let Some(ref tx) = tx_clone {
+                let _ = tx.send(format!("⚙️ Native {} executing...\n", name_clone)).await;
+            }
+            let res = mem_clone.alu.execute_cell("bash", &desc).await;
+            match res {
+                Ok(output) => ToolResult {
+                    task_id,
+                    output: if output.is_empty() { "Command succeeded with no output.".into() } else { output },
+                    tokens_used: 0,
+                    status: ToolStatus::Success,
+                },
+                Err(e) => ToolResult {
+                    task_id,
+                    output: e.clone(),
+                    tokens_used: 0,
+                    status: ToolStatus::Failed(e),
+                }
+            }
+        });
+        return Some(handle);
+    }
+    if tool_type == "process_manager" {
+        let handle = tokio::spawn(async move {
+            crate::agent::process_manager::execute_process_manager(task_id, desc, tx_clone).await
+        });
+        return Some(handle);
+    }
+    
+    if tool_type == "file_system_operator" {
+        let handle = tokio::spawn(async move {
+            if let Some(ref tx) = tx_clone {
+                let _ = tx.send("📁 Native File System Operator executing...\n".to_string()).await;
+            }
+            
+            let action = crate::agent::preferences::extract_tag(&desc, "action:").unwrap_or_default();
+            let path_str = crate::agent::preferences::extract_tag(&desc, "path:").unwrap_or_default();
+            
+            if action.is_empty() || path_str.is_empty() {
+                return ToolResult {
+                    task_id,
+                    output: "Error: Missing action:[...] or path:[...]".into(),
+                    tokens_used: 0,
+                    status: ToolStatus::Failed("Invalid Args".into()),
+                };
+            }
+            
+            let path = std::path::Path::new(&path_str);
+            let final_output;
+            let mut is_err = false;
+            
+            match action.as_str() {
+                "write" => {
+                    let content = if let Some(idx) = desc.find("content:[") {
+                        let mut content_body = desc[idx + 9..].to_string();
+                        if content_body.ends_with(']') {
+                            content_body.pop();
+                        }
+                        content_body
+                    } else {
+                        "".to_string()
+                    };
+                    
+                    if let Some(parent) = path.parent() {
+                        let _ = tokio::fs::create_dir_all(parent).await;
+                    }
+                    if let Err(e) = tokio::fs::write(&path, content).await {
+                        final_output = format!("Failed to write: {}", e);
+                        is_err = true;
+                    } else {
+                        final_output = format!("Successfully wrote to {}", path_str);
+                    }
+                }
+                "append" => {
+                    let content = if let Some(idx) = desc.find("content:[") {
+                        let mut content_body = desc[idx + 9..].to_string();
+                        if content_body.ends_with(']') {
+                            content_body.pop();
+                        }
+                        content_body
+                    } else {
+                        "".to_string()
+                    };
+                    
+                    use tokio::io::AsyncWriteExt;
+                    match tokio::fs::OpenOptions::new().create(true).append(true).open(&path).await {
+                        Ok(mut file) => {
+                            if let Err(e) = file.write_all(content.as_bytes()).await {
+                                final_output = format!("Failed to append: {}", e);
+                                is_err = true;
+                            } else {
+                                final_output = format!("Successfully appended to {}", path_str);
+                            }
+                        }
+                        Err(e) => {
+                            final_output = format!("Failed to open for append: {}", e);
+                            is_err = true;
+                        }
+                    }
+                }
+                "delete" => {
+                    if path.is_file() {
+                        if let Err(e) = tokio::fs::remove_file(&path).await {
+                            final_output = format!("Failed to delete file: {}", e);
+                            is_err = true;
+                        } else {
+                            final_output = format!("Successfully deleted file {}", path_str);
+                        }
+                    } else if path.is_dir() {
+                        if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+                            final_output = format!("Failed to delete directory: {}", e);
+                            is_err = true;
+                        } else {
+                            final_output = format!("Successfully deleted directory {}", path_str);
+                        }
+                    } else {
+                        // If path doesn't exist, we still consider it a success if the user's goal was to make it not exist.
+                        final_output = format!("Successfully verified {} does not exist", path_str);
+                    }
+                }
+                _ => {
+                    final_output = format!("Unknown action: {}", action);
+                    is_err = true;
+                }
+            }
+            
+            ToolResult {
+                task_id,
+                output: final_output.clone(),
+                tokens_used: 0,
+                status: if is_err { ToolStatus::Failed(final_output) } else { ToolStatus::Success },
+            }
+        });
+        return Some(handle);
+    } 
     
     if tool_type == "autonomy_activity" {
         let handle = tokio::spawn(async move {
@@ -213,8 +351,7 @@ pub fn dispatch_native_tool(
                             }
                         }
                         if let Some(summary) = entry.get("summary").and_then(|v| v.as_str()) {
-                            let short: String = summary.chars().take(120).collect();
-                            summaries.push(short);
+                            summaries.push(summary.to_string());
                         }
                     }
                 }
@@ -417,10 +554,46 @@ pub fn dispatch_native_tool(
         return Some(handle);
     } 
     
-    if tool_type == "store_lesson" {
+    if tool_type == "manage_lessons" {
+        let mem_clone = memory.clone();
+        let scope_clone = scope.clone();
+        let handle = tokio::spawn(async move {
+            crate::agent::lessons_drone::execute_manage_lessons(task_id, desc, mem_clone, tx_clone, &scope_clone).await
+        });
+        return Some(handle);
+    } 
+    
+    if tool_type == "search_timeline" {
+        let mem_clone = memory.clone();
+        let scope_clone = scope.clone();
+        let handle = tokio::spawn(async move {
+            crate::agent::timeline_drone::execute_search_timeline(task_id, desc, mem_clone, tx_clone, &scope_clone).await
+        });
+        return Some(handle);
+    }
+
+    if tool_type == "manage_scratchpad" {
+        let mem_clone = memory.clone();
+        let scope_clone = scope.clone();
+        let handle = tokio::spawn(async move {
+            crate::agent::scratchpad_drone::execute_manage_scratchpad(task_id, desc, mem_clone, tx_clone, &scope_clone).await
+        });
+        return Some(handle);
+    }
+
+    if tool_type == "operate_synaptic_graph" {
         let mem_clone = memory.clone();
         let handle = tokio::spawn(async move {
-            crate::agent::lessons_drone::execute_store_lesson(task_id, desc, mem_clone, tx_clone).await
+            crate::agent::synaptic_drone::execute_operate_synaptic_graph(task_id, desc, mem_clone, tx_clone).await
+        });
+        return Some(handle);
+    }
+
+    if tool_type == "read_core_memory" {
+        let mem_clone = memory.clone();
+        let scope_clone = scope.clone();
+        let handle = tokio::spawn(async move {
+            crate::agent::core_memory_drone::execute_read_core_memory(task_id, desc, mem_clone, tx_clone, &scope_clone).await
         });
         return Some(handle);
     } 

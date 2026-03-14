@@ -420,7 +420,7 @@ impl Engine {
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                     "turn_count": current_turn,
                     "tools_used": completed_tools.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(),
-                    "summary": response_text.chars().take(500).collect::<String>(),
+                    "summary": response_text.clone(),
                 });
                 tokio::spawn(async move {
                     let dir = std::path::Path::new("memory/autonomy");

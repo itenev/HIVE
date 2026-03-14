@@ -148,4 +148,19 @@ The user uploaded a CSV. I see a [USER_ATTACHMENT] tag with the CDN URL. Let me 
   ]
 }
 ```
+
+// Example 7: Memory Traversal (Waking up to a contextual gap)
+The user just messaged "did you finish that thing we talked about yesterday?", but my HUD is empty. I need to search the timeline.
+```json
+{
+  "tasks": [
+    {
+      "task_id": "recall",
+      "tool_type": "search_timeline",
+      "description": "action:[search] query:[finish] limit:[20]",
+      "depends_on": []
+    }
+  ]
+}
+```
 "#;

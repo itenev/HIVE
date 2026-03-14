@@ -157,8 +157,35 @@ pub async fn execute_react_loop(
                 thought: plan.thought.clone(),
                 tasks: standard_tasks,
             };
+            
+            // SECURITY GATE: Prevent non-admins from executing admin-only tools
+            let mut safe_standard_tasks = vec![];
+            let mut failed_admin_attempts = vec![];
+            
+            let is_admin = capabilities.admin_users.contains(&event.author_id);
+            for task in standard_plan.tasks {
+                if capabilities.admin_tools.contains(&task.tool_type) && !is_admin {
+                    failed_admin_attempts.push(crate::models::tool::ToolResult {
+                        task_id: task.task_id.clone(),
+                        output: format!("SECURITY VIOLATION: Tool {} requires [ADMIN ONLY] privileges. Your request is denied.", task.tool_type),
+                        tokens_used: 0,
+                        status: crate::models::tool::ToolStatus::Failed("Permission Denied".into()),
+                    });
+                } else {
+                    safe_standard_tasks.push(task);
+                }
+            }
+
+            let safe_plan = crate::agent::planner::AgentPlan {
+                thought: standard_plan.thought,
+                tasks: safe_standard_tasks,
+            };
+
             let tx_clone = telemetry_tx.clone();
-            let tool_results = agent.execute_plan(standard_plan, &event.content, event.scope.clone(), Some(tx_clone)).await;
+            let mut tool_results = agent.execute_plan(safe_plan, &event.content, event.scope.clone(), Some(tx_clone)).await;
+            
+            // Inject the failed security tools back into the results so the agent sees them fail
+            tool_results.extend(failed_admin_attempts);
             
             let result_count = tool_results.len();
             for res in &tool_results {

@@ -138,14 +138,31 @@ impl WorkingMemory {
         while let Ok(Some(entry)) = dirs.next_entry().await {
             let path = entry.path();
             if path.is_dir() {
-                let transcript_path = path.join("transcript.jsonl");
-                if let Ok(contents) = tokio::fs::read_to_string(&transcript_path).await {
-                    for line in contents.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() { continue; }
-                        if let Ok(event) = serde_json::from_str::<crate::models::message::Event>(trimmed) {
-                            total_tokens += event.content.len() / 4;
-                            all_events.push(event);
+                let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
+                
+                let mut transcript_paths = Vec::new();
+
+                if dir_name.starts_with("public_") {
+                    if let Ok(mut subdirs) = tokio::fs::read_dir(&path).await {
+                        while let Ok(Some(sub_entry)) = subdirs.next_entry().await {
+                            if sub_entry.path().is_dir() {
+                                transcript_paths.push(sub_entry.path().join("transcript.jsonl"));
+                            }
+                        }
+                    }
+                } else if dir_name.starts_with("private_") {
+                    transcript_paths.push(path.join("transcript.jsonl"));
+                }
+                
+                for t_path in transcript_paths {
+                    if let Ok(contents) = tokio::fs::read_to_string(&t_path).await {
+                        for line in contents.lines() {
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() { continue; }
+                            if let Ok(event) = serde_json::from_str::<crate::models::message::Event>(trimmed) {
+                                total_tokens += event.content.len() / 4;
+                                all_events.push(event);
+                            }
                         }
                     }
                 }
