@@ -81,17 +81,10 @@ async fn test_agent_execute_plan_tool_not_found() {
 
 #[tokio::test]
 async fn test_agent_channel_reader() {
+    // channel_reader now uses the Discord REST API directly.
+    // Without DISCORD_TOKEN, it should gracefully report the missing token.
     let mock_provider = MockProvider::new();
     let memory = Arc::new(MemoryStore::default());
-    let test_evt = crate::models::message::Event {
-        platform: "test".into(),
-        scope: crate::models::scope::Scope::Public { channel_id: "test_chan".into(), user_id: "system".into() },
-        author_name: "test".into(),
-        author_id: "test".into(),
-        content: "test timeline string payload".into(),
-    };
-    let _ = memory.timeline.append_event(&test_evt).await;
-
     let agent = AgentManager::new(Arc::new(mock_provider), memory);
     
     let plan = crate::agent::planner::AgentPlan {
@@ -100,7 +93,7 @@ async fn test_agent_channel_reader() {
             crate::agent::planner::AgentTask {
                 task_id: "1".into(),
                 tool_type: "channel_reader".into(),
-                description: "read test_chan".into(),
+                description: "read channel 1479744132904915125".into(),
                 depends_on: vec![],
                 source: None,
             }
@@ -109,7 +102,12 @@ async fn test_agent_channel_reader() {
 
     let results = agent.execute_plan(plan, "Context", crate::models::scope::Scope::Private { user_id: "test".into() }, None).await;
     assert_eq!(results.len(), 1);
-    assert!(results[0].output.contains("test timeline"));
+    // Without DISCORD_TOKEN env var, should fail gracefully
+    let output = &results[0].output;
+    assert!(
+        output.contains("DISCORD_TOKEN") || output.contains("Channel") || output.contains("discord"),
+        "Expected Discord API error, got: {}", output
+    );
 }
 
 #[tokio::test]

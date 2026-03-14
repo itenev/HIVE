@@ -19,6 +19,7 @@ pub struct Handler {
     pub(crate) tts_cache: Arc<Mutex<std::collections::HashMap<u64, String>>>,
     pub(crate) continue_responses: Arc<Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<bool>>>>,
     pub(crate) is_tending: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) memory: Arc<crate::memory::MemoryStore>,
 }
 
 #[async_trait]
@@ -81,10 +82,11 @@ pub struct DiscordPlatform {
     tts_cache: Arc<Mutex<std::collections::HashMap<u64, String>>>,
     continue_responses: Arc<Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<bool>>>>,
     is_tending: Arc<std::sync::atomic::AtomicBool>,
+    memory: Arc<crate::memory::MemoryStore>,
 }
 
 impl DiscordPlatform {
-    pub fn new(token: String) -> Self {
+    pub fn new(token: String, memory: Arc<crate::memory::MemoryStore>) -> Self {
         Self { 
             token,
             http: Mutex::new(None),
@@ -92,6 +94,7 @@ impl DiscordPlatform {
             tts_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             continue_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
             is_tending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            memory,
         }
     }
 }
@@ -112,6 +115,7 @@ impl Platform for DiscordPlatform {
             tts_cache: self.tts_cache.clone(),
             continue_responses: self.continue_responses.clone(),
             is_tending: self.is_tending.clone(),
+            memory: self.memory.clone(),
         };
 
         let mut client = Client::builder(&self.token, intents)
@@ -293,13 +297,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_discord_name() {
-        let discord = DiscordPlatform::new("".to_string());
+        let discord = DiscordPlatform::new("".to_string(), Arc::new(crate::memory::MemoryStore::default()));
         assert_eq!(discord.name(), "discord");
     }
 
     #[tokio::test]
     async fn test_discord_send_invalid_platform_id() {
-        let discord = DiscordPlatform::new("".to_string());
+        let discord = DiscordPlatform::new("".to_string(), Arc::new(crate::memory::MemoryStore::default()));
         let res = Response {
             platform: "discord".to_string(),
             target_scope: Scope::Public { channel_id: "123".to_string(), user_id: "user".to_string() },
@@ -312,7 +316,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_discord_send_uninitialized_http() {
-        let discord = DiscordPlatform::new("".to_string());
+        let discord = DiscordPlatform::new("".to_string(), Arc::new(crate::memory::MemoryStore::default()));
         let res = Response {
             platform: "discord:1234:5678".to_string(),
             target_scope: Scope::Public { channel_id: "123".to_string(), user_id: "user".to_string() },

@@ -62,6 +62,44 @@ pub async fn handle_message(handler: &super::Handler, ctx: Context, msg: Message
         return;
     }
 
+    // /new — Available to ALL users. Archives current session and starts fresh.
+    if msg.content.trim() == "/new" {
+        let _ = msg.react(&ctx.http, serenity::model::channel::ReactionType::Unicode("🔄".to_string())).await;
+
+        let scope = if msg.guild_id.is_none() {
+            Scope::Private { user_id: msg.author.id.get().to_string() }
+        } else {
+            Scope::Public { channel_id: msg.channel_id.get().to_string(), user_id: msg.author.id.get().to_string() }
+        };
+
+        // Archive current session to persistent storage
+        let memory = handler.memory.clone();
+        let _ = memory.check_and_trigger_autosave(&scope).await;
+        // Force clear even if under token limit (autosave only fires above limit)
+        memory.working.clear(&scope).await;
+
+        // Inject a fresh continuity event so Apis knows a new session started
+        let continuity_event = Event {
+            platform: "system:session".to_string(),
+            scope: scope.clone(),
+            author_name: "System".to_string(),
+            author_id: "system".into(),
+            content: format!(
+                "*** NEW SESSION ***\n\n\
+                User {} initiated a new session via /new.\n\
+                Previous conversation has been archived to persistent memory.\n\
+                You are now operating in a fresh context window.\n\
+                Greet them warmly and ask what they'd like to work on.",
+                msg.author.name
+            ),
+        };
+        memory.add_event(continuity_event).await;
+
+        let _ = msg.reply(&ctx.http, "🔄 **Session saved and reset.** Starting fresh — Apis is ready for a new conversation.").await;
+        tracing::info!("[SESSION] /new triggered by {} — working memory archived and cleared.", msg.author.name);
+        return;
+    }
+
     let is_dm = msg.guild_id.is_none();
 
     // Tending Mode Check

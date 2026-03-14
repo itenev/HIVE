@@ -23,25 +23,95 @@ pub fn dispatch_native_tool(
     let tool_type = task.tool_type.as_str();
 
     if tool_type == "channel_reader" {
-        let mem_clone = memory.clone();
         let handle = tokio::spawn(async move {
             if let Some(ref tx) = tx_clone {
                 let _ = tx.send(format!("🧠 Native Channel Reader Tool executing...\n")).await;
             }
-            let target_id = desc.split_whitespace().last().unwrap_or(&"").to_string();
-            let pub_scope = Scope::Public { channel_id: target_id.clone(), user_id: "system".into() };
+            let target_id = desc.split_whitespace()
+                .find(|s| s.chars().all(|c| c.is_ascii_digit()) && s.len() > 10)
+                .unwrap_or("")
+                .to_string();
 
-            let output = if let Ok(timeline_data) = mem_clone.timeline.read_timeline(&pub_scope).await {
-                String::from_utf8_lossy(&timeline_data).to_string()
-            } else {
-                "Failed to read timeline for channel.".to_string()
-            };
-            
-            ToolResult {
-                task_id,
-                output,
-                tokens_used: 0,
-                status: ToolStatus::Success,
+            if target_id.is_empty() {
+                return ToolResult {
+                    task_id,
+                    output: "Error: No valid channel ID found. Provide a numeric Discord channel ID.".into(),
+                    tokens_used: 0,
+                    status: ToolStatus::Failed("Missing channel ID".into()),
+                };
+            }
+
+            // Use Discord REST API directly to fetch real channel messages
+            let token = std::env::var("DISCORD_TOKEN").unwrap_or_default();
+            if token.is_empty() {
+                return ToolResult {
+                    task_id,
+                    output: "Error: DISCORD_TOKEN not set. Cannot fetch channel messages.".into(),
+                    tokens_used: 0,
+                    status: ToolStatus::Failed("No token".into()),
+                };
+            }
+
+            let url = format!("https://discord.com/api/v10/channels/{}/messages?limit=50", target_id);
+            let client = reqwest::Client::new();
+            match client.get(&url)
+                .header("Authorization", format!("Bot {}", token))
+                .header("User-Agent", "HIVE-Engine/1.0")
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let body = resp.text().await.unwrap_or_default();
+                        return ToolResult {
+                            task_id,
+                            output: format!("Discord API error ({}): {}", status, body),
+                            tokens_used: 0,
+                            status: ToolStatus::Failed(format!("HTTP {}", status)),
+                        };
+                    }
+                    match resp.json::<Vec<serde_json::Value>>().await {
+                        Ok(messages) => {
+                            if messages.is_empty() {
+                                return ToolResult {
+                                    task_id,
+                                    output: "Channel exists but has no messages.".into(),
+                                    tokens_used: 0,
+                                    status: ToolStatus::Success,
+                                };
+                            }
+                            let mut transcript = format!("--- Channel {} — Last {} messages ---\n\n", target_id, messages.len());
+                            // Discord returns newest first, reverse for chronological order
+                            for msg in messages.iter().rev() {
+                                let author = msg["author"]["username"].as_str().unwrap_or("unknown");
+                                let content = msg["content"].as_str().unwrap_or("");
+                                let timestamp = msg["timestamp"].as_str().unwrap_or("");
+                                // Truncate timestamp to just time
+                                let time_short = if timestamp.len() >= 19 { &timestamp[11..19] } else { timestamp };
+                                transcript.push_str(&format!("[{}] {}: {}\n", time_short, author, content));
+                            }
+                            ToolResult {
+                                task_id,
+                                output: transcript,
+                                tokens_used: 0,
+                                status: ToolStatus::Success,
+                            }
+                        }
+                        Err(e) => ToolResult {
+                            task_id,
+                            output: format!("Failed to parse Discord response: {}", e),
+                            tokens_used: 0,
+                            status: ToolStatus::Failed("Parse error".into()),
+                        },
+                    }
+                }
+                Err(e) => ToolResult {
+                    task_id,
+                    output: format!("Failed to reach Discord API: {}", e),
+                    tokens_used: 0,
+                    status: ToolStatus::Failed("Network error".into()),
+                },
             }
         });
         return Some(handle);

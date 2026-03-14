@@ -82,7 +82,7 @@ pub async fn run_app() {
 
     // 4. Build the engine with our defined platforms and injected contexts
     let engine = EngineBuilder::new()
-        .with_platform(Box::new(DiscordPlatform::new(discord_token)))
+        .with_platform(Box::new(DiscordPlatform::new(discord_token, memory_store.clone())))
         .with_platform(Box::new(CliPlatform::new(reader)))
         .with_provider(provider)
         .with_capabilities(capabilities)
