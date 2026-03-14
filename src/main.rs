@@ -34,23 +34,21 @@ fn get_reader() -> Box<dyn AsyncBufRead + Unpin + Send + Sync> {
 
 #[cfg(not(tarpaulin_include))]
 pub async fn run_app() {
-    let file_appender = tracing_appender::rolling::never("logs", "hive.log");
+    let file_appender = tracing_appender::rolling::daily("logs", "hive.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     
-    // Set up tracing to write to both stdout and the file
+    // Set up standard tracing subscriber with EnvFilter for dynamic verbosity
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,HIVE=debug"));
+
     let subscriber = tracing_subscriber::fmt()
-        .with_writer(
-            std::io::stdout
-                .with_max_level(tracing::Level::INFO)
-                .and(non_blocking),
-        )
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stdout.and(non_blocking))
         .finish();
         
     let _ = tracing::subscriber::set_global_default(subscriber);
 
     tracing::info!("Starting HIVE initialization sequence...");
-    
-    println!("Starting HIVE...");
     let reader = get_reader();
     
     dotenv::dotenv().ok(); // Load .env file manually
@@ -97,12 +95,12 @@ pub async fn run_app() {
             tracing::info!("Engine shut down gracefully.");
         }
         _ = tokio::signal::ctrl_c() => {
-            tracing::info!("Received Ctrl-C, executing shutdown sequence...");
-            println!("Shutting down HIVE... saving temporal state.");
+            tracing::warn!("Received Ctrl-C, executing shutdown sequence...");
+            tracing::info!("Shutting down HIVE... saving temporal state.");
             memory_store.temporal.write().await.record_shutdown();
             // Allow disk flushes
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            println!("Shutdown complete.");
+            tracing::info!("Shutdown complete.");
         }
     }
 }

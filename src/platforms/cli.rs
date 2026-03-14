@@ -36,7 +36,7 @@ impl Platform for CliPlatform {
         
         tokio::spawn(async move {
             let mut lines = reader.lines();
-            println!("HIVE CLI initialized. Type your message to Apis. (Prefix with /dm to test private scope)");
+            tracing::info!("HIVE CLI initialized. Type your message to Apis. (Prefix with /dm to test private scope)");
 
             while let Ok(Some(line)) = lines.next_line().await {
                 if line.trim().is_empty() {
@@ -58,7 +58,7 @@ impl Platform for CliPlatform {
                 };
 
                 if sender.send(event).await.is_err() {
-                    eprintln!("Failed to send event to engine");
+                    tracing::error!("Failed to send event to engine");
                     break;
                 }
             }
@@ -71,10 +71,10 @@ impl Platform for CliPlatform {
     async fn send(&self, response: Response) -> Result<(), PlatformError> {
         match response.target_scope {
             Scope::Public { .. } => {
-                println!("[\x1b[36mApis (Public)\x1b[0m] {}", response.text);
+                tracing::info!("[\x1b[36mApis (Public)\x1b[0m] {}", response.text);
             }
             Scope::Private { user_id } => {
-                println!("[\x1b[35mApis (Private DM to {})\x1b[0m] {}", user_id, response.text);
+                tracing::info!("[\x1b[35mApis (Private DM to {})\x1b[0m] {}", user_id, response.text);
             }
         }
         Ok(())
@@ -82,6 +82,7 @@ impl Platform for CliPlatform {
 }
 
 #[cfg(test)]
+#[cfg(not(tarpaulin_include))]
 mod tests {
     use super::*;
     use std::io::Cursor;

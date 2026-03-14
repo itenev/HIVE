@@ -56,11 +56,10 @@ impl TimelineStore {
 
     pub async fn read(&self, scope: &Scope) -> TimelineData {
         let path = self.get_path(scope);
-        if let Ok(data) = tokio::fs::read_to_string(&path).await {
-            if let Ok(td) = serde_json::from_str(&data) {
+        if let Ok(data) = tokio::fs::read_to_string(&path).await
+            && let Ok(td) = serde_json::from_str(&data) {
                 return td;
             }
-        }
         TimelineData::default()
     }
 

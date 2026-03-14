@@ -38,15 +38,14 @@ impl OllamaProvider {
             model: "qwen3.5:35b".to_string(),
         }
     }
-    #[cfg(not(tarpaulin_include))]
     fn map_chunk_err(e: reqwest::Error) -> ProviderError {
         ProviderError::ConnectionError(e.to_string())
     }
 }
 
-#[cfg(not(tarpaulin_include))]
 #[async_trait]
 impl Provider for OllamaProvider {
+    #[tracing::instrument(skip(self, system_prompt, history, telemetry_tx), fields(model=%self.model, user=%new_event.author_name))]
     async fn generate(
         &self,
         system_prompt: &str,
@@ -138,6 +137,9 @@ impl Provider for OllamaProvider {
         }
 
         let images_opt = if b64_images.is_empty() { None } else { Some(b64_images) };
+
+        // Strict enforcement for Turn 1 "Monkey see, monkey do" conversational degradation
+        final_user_message.push_str("\n\n[SYSTEM ENFORCEMENT: You must output EXACTLY ONE valid JSON block. Do not output raw conversational text. Use the `reply_to_request` tool to speak to the user.]");
 
         // Add the current triggering event
         messages.push(OllamaMessage {

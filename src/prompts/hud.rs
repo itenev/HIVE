@@ -174,17 +174,15 @@ impl HudData {
         let mut matched_routines = Vec::new();
         if let Ok(mut rd) = tokio::fs::read_dir(&routines_dir).await {
             while let Ok(Some(entry)) = rd.next_entry().await {
-                if let Ok(name) = entry.file_name().into_string() {
-                    if name.ends_with(".md") {
-                        if let Ok(content) = tokio::fs::read_to_string(entry.path()).await {
+                if let Ok(name) = entry.file_name().into_string()
+                    && name.ends_with(".md")
+                        && let Ok(content) = tokio::fs::read_to_string(entry.path()).await {
                             let content_lower = content.to_lowercase();
                             // If ANY recent user word over 4 characters is in the routine body, flag it.
                             if recent_words.iter().filter(|w| w.len() > 4).any(|kw| content_lower.contains(kw)) {
                                 matched_routines.push(name);
                             }
                         }
-                    }
-                }
             }
         }
 

@@ -30,7 +30,7 @@ pub async fn execute_file_writer(
         };
     }
 
-    let composer = composer_opt.unwrap_or_else(crate::computer::document::DocumentComposer::new);
+    let composer = composer_opt.unwrap_or_default();
 
     let output = match action.as_str() {
         "start" => {

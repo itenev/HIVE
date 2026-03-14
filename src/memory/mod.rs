@@ -109,7 +109,7 @@ impl MemoryStore {
         // Track roster for Public scopes
         if let Scope::Public { channel_id, .. } = &event.scope {
             let mut rosters: tokio::sync::RwLockWriteGuard<'_, HashMap<String, Vec<String>>> = self.rosters.write().await;
-            let channel_roster = rosters.entry(channel_id.clone()).or_insert_with(Vec::new);
+            let channel_roster = rosters.entry(channel_id.clone()).or_default();
             
             // Add if not already present; push to end to signify recency
             // Keep the last 10 unique speakers.

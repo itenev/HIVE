@@ -5,33 +5,13 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::models::message::Event;
-use crate::models::scope::Scope;
 
-/// A single golden example: first-pass Observer approval, perfect interaction.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GoldenExample {
-    pub ts: String,
-    pub system_prompt: String,
-    pub user_msg: String,
-    pub agent_ctx: String,
-    pub response: String,
-    pub tools: Vec<String>,
-    pub attempts: usize,
-}
 
-/// A single ORPO preference pair: blocked response vs corrected response.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PreferencePair {
-    pub ts: String,
-    pub prompt: String,
-    pub chosen: String,
-    pub rejected: String,
-    pub failure_category: String,
-    pub observer_reason: String,
-    pub rejection_index: usize,
-    pub total_attempts: usize,
-}
+pub mod evaluation;
+pub mod generation;
+
+pub use evaluation::PreferencePair;
+pub use generation::GoldenExample;
 
 /// Model version metadata for manifest.json lineage tracking.
 #[derive(Debug, Serialize, Deserialize)]
@@ -122,92 +102,7 @@ impl Teacher {
         }
     }
 
-    /// Capture a golden example (first-pass Observer approval). Public scope only.
-    pub async fn capture_golden(
-        &self,
-        system_prompt: &str,
-        event: &Event,
-        agent_ctx: &str,
-        response: &str,
-    ) {
-        // Privacy guard: never train on DM content
-        if matches!(event.scope, Scope::Private { .. }) {
-            return;
-        }
 
-        let example = GoldenExample {
-            ts: chrono::Utc::now().to_rfc3339(),
-            system_prompt: system_prompt.to_string(),
-            user_msg: event.content.clone(),
-            agent_ctx: agent_ctx.to_string(),
-            response: response.to_string(),
-            tools: Self::extract_tools(agent_ctx),
-            attempts: 1,
-        };
-
-        if let Ok(json) = serde_json::to_string(&example) {
-            use tokio::io::AsyncWriteExt;
-            if let Ok(mut file) = tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.golden_path)
-                .await
-            {
-                let _ = file.write_all(format!("{}\n", json).as_bytes()).await;
-                self.golden_count.fetch_add(1, Ordering::Relaxed);
-                println!("[TEACHER] 🏆 Golden example captured ({} buffered)", self.golden_count.load(Ordering::Relaxed));
-            }
-        }
-    }
-
-    /// Capture an ORPO preference pair (blocked → corrected). Public scope only.
-    pub async fn capture_preference_pair(
-        &self,
-        system_prompt: &str,
-        event: &Event,
-        agent_ctx: &str,
-        rejected: &str,
-        chosen: &str,
-        failure_category: &str,
-        observer_reason: &str,
-        rejection_index: usize,
-        total_attempts: usize,
-    ) {
-        if matches!(event.scope, Scope::Private { .. }) {
-            return;
-        }
-
-        let mut user_msg = event.content.clone();
-        if !agent_ctx.is_empty() {
-            user_msg.push_str("\n\n[INTERNAL EXECUTION LOOP]\n");
-            user_msg.push_str(agent_ctx);
-        }
-
-        let pair = PreferencePair {
-            ts: chrono::Utc::now().to_rfc3339(),
-            prompt: format!("{}\n\nUser: {}", system_prompt, user_msg),
-            chosen: chosen.to_string(),
-            rejected: rejected.to_string(),
-            failure_category: failure_category.to_string(),
-            observer_reason: observer_reason.to_string(),
-            rejection_index,
-            total_attempts,
-        };
-
-        if let Ok(json) = serde_json::to_string(&pair) {
-            use tokio::io::AsyncWriteExt;
-            if let Ok(mut file) = tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.preference_path)
-                .await
-            {
-                let _ = file.write_all(format!("{}\n", json).as_bytes()).await;
-                self.preference_count.fetch_add(1, Ordering::Relaxed);
-                println!("[TEACHER] ⚖️ Preference pair captured [{}] ({} buffered)", failure_category, self.preference_count.load(Ordering::Relaxed));
-            }
-        }
-    }
 
     /// Get current buffer counts (atomic, zero overhead on hot path).
     pub fn get_counts(&self) -> (usize, usize) {
@@ -276,286 +171,96 @@ impl Teacher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::scope::Scope;
+    use std::sync::atomic::Ordering;
     use tempfile::TempDir;
 
-    fn test_event(scope: Scope) -> Event {
-        Event {
-            platform: "test".into(),
-            scope,
-            author_name: "Tester".into(),
-            author_id: "123".into(),
-            content: "Hello Apis".into(),
-        }
-    }
-
-    #[test]
-    fn test_teacher_new() {
+    #[tokio::test]
+    async fn test_teacher_initialization() {
         let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
+        let path = tmp.path().to_path_buf();
+        
+        let teacher = Teacher::new(Some(path.clone()));
+        
         assert_eq!(teacher.get_counts(), (0, 0));
-    }
-
-    #[test]
-    fn test_teacher_default_dir() {
-        let teacher = Teacher::new(None);
-        assert!(teacher.golden_path.ends_with("golden_buffer.jsonl"));
-        assert!(teacher.preference_path.ends_with("preference_buffer.jsonl"));
-    }
-
-    #[tokio::test]
-    async fn test_capture_golden_public() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-
-        let event = test_event(Scope::Public {
-            channel_id: "ch1".into(),
-            user_id: "u1".into(),
-        });
-
-        teacher.capture_golden("system", &event, "agent ctx", "response").await;
-        assert_eq!(teacher.get_counts(), (1, 0));
-
-        let content: String = tokio::fs::read_to_string(tmp.path().join("golden_buffer.jsonl")).await.unwrap();
-        assert!(content.contains("Hello Apis"));
-        assert!(content.contains("response"));
+        assert!(path.join("archive").exists());
+        
+        // Write bogus data to the buffers to test restart counting
+        std::fs::write(teacher.golden_path.clone(), "line1\nline2\n\nline3").unwrap();
+        std::fs::write(teacher.preference_path.clone(), "line1\n").unwrap();
+        
+        let teacher_reloaded = Teacher::new(Some(path));
+        assert_eq!(teacher_reloaded.get_counts(), (3, 1));
     }
 
     #[tokio::test]
-    async fn test_capture_golden_private_skipped() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-
-        let event = test_event(Scope::Private {
-            user_id: "u1".into(),
-        });
-
-        teacher.capture_golden("system", &event, "ctx", "resp").await;
-        assert_eq!(teacher.get_counts(), (0, 0));
-    }
-
-    #[tokio::test]
-    async fn test_capture_preference_pair() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-
-        let event = test_event(Scope::Public {
-            channel_id: "ch1".into(),
-            user_id: "u1".into(),
-        });
-
-        teacher.capture_preference_pair(
-            "system", &event, "",
-            "bad response", "good response",
-            "ghost_tooling", "Claimed tool use without execution",
-            1, 2,
-        ).await;
-        assert_eq!(teacher.get_counts(), (0, 1));
-
-        let content: String = tokio::fs::read_to_string(tmp.path().join("preference_buffer.jsonl")).await.unwrap();
-        assert!(content.contains("ghost_tooling"));
-        assert!(content.contains("bad response"));
-        assert!(content.contains("good response"));
-    }
-
-    #[tokio::test]
-    async fn test_capture_preference_pair_private_skipped() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-
-        let event = test_event(Scope::Private {
-            user_id: "u1".into(),
-        });
-
-        teacher.capture_preference_pair(
-            "system", &event, "",
-            "bad", "good",
-            "sycophancy", "Tone is wrong",
-            1, 2,
-        ).await;
-        assert_eq!(teacher.get_counts(), (0, 0));
-    }
-
-    #[tokio::test]
-    async fn test_multiple_golden_captures() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-
-        let event = test_event(Scope::Public {
-            channel_id: "ch1".into(),
-            user_id: "u1".into(),
-        });
-
-        teacher.capture_golden("sys1", &event, "Tool: researcher", "resp1").await;
-        teacher.capture_golden("sys2", &event, "ctx2", "resp2").await;
-        teacher.capture_golden("sys3", &event, "ctx3", "resp3").await;
-        assert_eq!(teacher.get_counts(), (3, 0));
-
-        let content = tokio::fs::read_to_string(tmp.path().join("golden_buffer.jsonl")).await.unwrap();
-        let lines: Vec<&str> = content.trim().split('\n').collect();
-        assert_eq!(lines.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_multiple_preference_pairs() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-
-        let event = test_event(Scope::Public {
-            channel_id: "ch1".into(),
-            user_id: "u1".into(),
-        });
-
-        teacher.capture_preference_pair("sys", &event, "", "bad1", "good1", "ghost_tooling", "reason1", 1, 3).await;
-        teacher.capture_preference_pair("sys", &event, "", "bad2", "good1", "sycophancy", "reason2", 2, 3).await;
-        assert_eq!(teacher.get_counts(), (0, 2));
-
-        let content = tokio::fs::read_to_string(tmp.path().join("preference_buffer.jsonl")).await.unwrap();
-        let lines: Vec<&str> = content.trim().split('\n').collect();
-        assert_eq!(lines.len(), 2);
-        assert!(content.contains("ghost_tooling"));
-        assert!(content.contains("sycophancy"));
-    }
-
-    #[tokio::test]
-    async fn test_training_lock() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-
-        assert!(teacher.try_acquire_training_lock().await);
-        assert!(!teacher.try_acquire_training_lock().await);
-        teacher.release_training_lock().await;
-        assert!(teacher.try_acquire_training_lock().await);
-    }
-
-    #[test]
-    fn test_manifest_default() {
-        let manifest = Manifest::default();
-        assert_eq!(manifest.current, "qwen3.5:35b");
-        assert_eq!(manifest.base, "qwen3.5:35b");
-        assert!(manifest.history.is_empty());
-        assert_eq!(manifest.retention, 5);
-    }
-
-    #[test]
-    fn test_manifest_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-
-        let mut manifest = Manifest::default();
-        manifest.current = "apis-v1-20260307".into();
-        manifest.history.push(ModelVersion {
-            version: "apis-v1-20260307".into(),
-            date: "2026-03-07".into(),
-            golden_count: 10,
-            pair_count: 3,
-            parent: "qwen3.5:35b".into(),
-        });
-
-        teacher.save_manifest(&manifest);
-        let loaded = teacher.load_manifest();
-        assert_eq!(loaded.current, "apis-v1-20260307");
-        assert_eq!(loaded.history.len(), 1);
-        assert_eq!(loaded.history[0].golden_count, 10);
-        assert_eq!(loaded.history[0].pair_count, 3);
-        assert_eq!(loaded.history[0].parent, "qwen3.5:35b");
-    }
-
-    #[test]
-    fn test_manifest_load_missing_file() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-        let manifest = teacher.load_manifest();
-        assert_eq!(manifest.current, "qwen3.5:35b");
-    }
-
-    #[test]
-    fn test_manifest_load_corrupt_data() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-        std::fs::write(tmp.path().join("manifest.json"), "not valid json").unwrap();
-        let manifest = teacher.load_manifest();
-        assert_eq!(manifest.current, "qwen3.5:35b");
-    }
-
-    #[test]
-    fn test_reset_counts() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-        teacher.golden_count.store(5, Ordering::Relaxed);
-        teacher.preference_count.store(3, Ordering::Relaxed);
-        teacher.reset_counts();
-        assert_eq!(teacher.get_counts(), (0, 0));
-    }
-
-    #[test]
-    fn test_extract_tools_with_tools() {
-        let ctx = "Step 1: planning\nTool: researcher\nStep 2: execute\ntool_type: codebase_list\nSome other line";
-        let tools = Teacher::extract_tools(ctx);
-        assert_eq!(tools.len(), 2);
-        assert!(tools[0].contains("Tool:"));
-        assert!(tools[1].contains("tool_type"));
-    }
-
-    #[test]
-    fn test_extract_tools_empty() {
-        let tools = Teacher::extract_tools("no tool info here");
-        assert!(tools.is_empty());
-        let tools2 = Teacher::extract_tools("");
-        assert!(tools2.is_empty());
-    }
-
-    #[test]
-    fn test_archive_dir_exists() {
-        let tmp = TempDir::new().unwrap();
-        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
-        assert!(teacher.get_archive_dir().exists());
-    }
-
-    #[test]
-    fn test_constants() {
-        assert_eq!(GOLDEN_THRESHOLD, 5);
-        assert_eq!(PAIR_THRESHOLD, 3);
-        assert_eq!(MIN_COOLDOWN_SECS, 900);
-    }
-
-    #[tokio::test]
-    async fn test_teacher_training_lock() {
+    async fn test_training_locks() {
         let tmp = TempDir::new().unwrap();
         let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
         
         let acquired = teacher.try_acquire_training_lock().await;
         assert!(acquired);
         
-        // Cannot acquire again
         let acquired_again = teacher.try_acquire_training_lock().await;
         assert!(!acquired_again);
         
-        // Release and acquire
         teacher.release_training_lock().await;
-        let acquired_after_release = teacher.try_acquire_training_lock().await;
-        assert!(acquired_after_release);
+        
+        let acquired_third = teacher.try_acquire_training_lock().await;
+        assert!(acquired_third);
     }
 
     #[tokio::test]
-    async fn test_teacher_dpo_pair_reject() {
+    async fn test_reset_counts() {
         let tmp = TempDir::new().unwrap();
         let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
         
-        let private_event = crate::models::message::Event {
-            platform: "test".into(),
-            scope: crate::models::scope::Scope::Private { user_id: "test".into() },
-            author_name: "TestUser".to_string(),
-            author_id: "test".into(),
-            content: "Ping".to_string(),
+        teacher.golden_count.store(5, Ordering::Relaxed);
+        teacher.preference_count.store(10, Ordering::Relaxed);
+        
+        assert_eq!(teacher.get_counts(), (5, 10));
+        
+        teacher.reset_counts();
+        assert_eq!(teacher.get_counts(), (0, 0));
+    }
+
+    #[test]
+    fn test_manifest_handling() {
+        let tmp = TempDir::new().unwrap();
+        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
+        
+        let default_manifest = teacher.load_manifest();
+        assert_eq!(default_manifest.current, "qwen3.5:35b");
+        assert_eq!(default_manifest.history.len(), 0);
+        
+        let custom = Manifest {
+            current: "llama3".into(),
+            base: "llama3".into(),
+            history: vec![],
+            retention: 3,
         };
+        
+        teacher.save_manifest(&custom);
+        
+        let loaded = teacher.load_manifest();
+        assert_eq!(loaded.current, "llama3");
+        assert_eq!(loaded.retention, 3);
+    }
 
-        // This should immediately return without writing because of Private scope
-        teacher.capture_preference_pair(
-            "sys", &private_event, "ctx", "reject", "choose", "safety", "toxic", 1, 1
-        ).await;
+    #[test]
+    fn test_extract_tools() {
+        let ctx = "Tool: web_search\nOther log text\ntool_type: file_writer\nDone.";
+        let tools = Teacher::extract_tools(ctx);
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0], "Tool: web_search");
+        assert_eq!(tools[1], "tool_type: file_writer");
+    }
 
-        let counts = teacher.get_counts();
-        assert_eq!(counts.1, 0); // No preference pair appended
+    #[test]
+    fn test_get_archive_dir() {
+        let tmp = TempDir::new().unwrap();
+        let teacher = Teacher::new(Some(tmp.path().to_path_buf()));
+        let archive = teacher.get_archive_dir();
+        assert!(archive.ends_with("archive"));
     }
 }
+

@@ -189,9 +189,9 @@ mod tests {
     async fn test_alu_execute_unsupported() {
         let dir = env::temp_dir().join("hive_turing_test_alu_unsup");
         let alu = ALU::new(Some(dir.clone()));
-        let res = alu.execute_cell("ruby", "puts 'hello'").await;
+        let res = alu.execute_cell("cplusplus", "cout << 'hello'").await;
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Unsupported execution format: ruby"));
+        assert!(res.unwrap_err().contains("Unsupported execution format: cplusplus"));
         let _ = fs::remove_dir_all(&dir).await;
     }
 
@@ -199,7 +199,8 @@ mod tests {
     async fn test_alu_execute_timeout() {
         let dir = env::temp_dir().join("hive_turing_test_alu_timeout");
         let alu = ALU::new(Some(dir.clone()));
-        let res = alu.execute_cell("python", "import time\ntime.sleep(6)").await;
+        // Note: Implementation uses 15s timeout
+        let res = alu.execute_cell("python", "import time\ntime.sleep(16)").await;
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Execution Timeout"));
         let _ = fs::remove_dir_all(&dir).await;

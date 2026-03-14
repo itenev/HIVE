@@ -1,4 +1,9 @@
     use super::*;
+    use std::sync::Arc;
+    use crate::engine::core::format_elapsed;
+    use crate::models::capabilities::AgentCapabilities;
+    use crate::platforms::Platform;
+    use crate::models::message::Response;
 
     #[tokio::test]
     async fn test_engine_trigger_autosave() {
@@ -32,8 +37,10 @@
         tx.send(event).await.unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
+
     use crate::providers::MockProvider;
     use crate::models::scope::Scope;
+    use crate::models::message::Event;
     use tokio::sync::mpsc;
     use tokio::time::{sleep, Duration};
 
@@ -366,6 +373,24 @@
         assert_eq!(result, "{\"tasks\": []}");
     }
 
+    #[test]
+    fn test_repair_planner_json_unescaped_newlines() {
+        let input = r#"{
+            "tasks": [
+                {
+                    "task_id": "step_1",
+                    "tool_type": "reply_to_request",
+                    "description": "Here is a multiline
+string ending with an unescaped quote \" and an emoji 😊.",
+                    "depends_on": []
+                }
+            ]
+        }"#;
+        let result = crate::engine::repair::repair_planner_json(input);
+        assert!(serde_json::from_str::<crate::agent::planner::AgentPlan>(&result).is_ok());
+        assert!(result.contains("\\n"), "Newlines were not escaped");
+    }
+
     #[tokio::test]
     async fn test_engine_observer_retry_loop() {
         use crate::providers::MockProvider;
@@ -373,6 +398,7 @@
         use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::time::{sleep, Duration};
 
+        use std::sync::Arc;
         let call_count = Arc::new(AtomicUsize::new(0));
         let call_count_ptr = call_count.clone();
 
@@ -421,11 +447,14 @@
         use crate::engine::tests::DummyPlatform;
         use tokio::time::{sleep, Duration};
         
+        use std::sync::Arc;
         let mut mock_provider = MockProvider::new();
+        let pass_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         mock_provider
             .expect_generate()
-            .returning(|sys, _, _, _ctx, _| {
-                if sys.contains("Agent Queen Planner") {
+            .returning(move |_sys, _, _, _ctx, _| {
+                let pass = pass_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if pass == 0 {
                     // 1. Planner pass: Return a valid AgentPlan JSON
                     Ok(r#"{
                       "tasks": [
@@ -437,12 +466,21 @@
                         }
                       ]
                     }"#.to_string())
-                } else if sys.contains("Researcher Tool") {
-                    // 2. Tool execution pass
-                    Ok("Tool internal thought process complete".to_string())
+                } else if pass == 1 {
+                    // 2. Synthesizer/Re-Planner pass: Needs to exit with reply_to_request
+                    Ok(r#"{
+                      "tasks": [
+                        {
+                          "task_id": "final_reply",
+                          "tool_type": "reply_to_request",
+                          "description": "I found the info",
+                          "depends_on": []
+                        }
+                      ]
+                    }"#.to_string())
                 } else {
-                    // 3. Final Assembler pass
-                    Ok("Final output from Queen based on tool output".to_string())
+                    // 3. Observer pass/Final Output
+                    Ok(r#"{"verdict": "ALLOWED", "failure_category": "none", "what_worked": "N/A", "what_went_wrong": "Safe", "how_to_fix": "None"}"#.to_string())
                 }
             });
 
@@ -477,16 +515,30 @@
         use crate::engine::tests::DummyPlatform;
         use tokio::time::{sleep, Duration};
 
+        use std::sync::Arc;
         let mut mock_provider = MockProvider::new();
+        let pass_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         mock_provider
             .expect_generate()
-            .returning(|sys, _, _, _ctx, _| {
-                if sys.contains("Agent Queen Planner") {
+            .returning(move |sys, _, _, _ctx, _| {
+                let pass = pass_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if sys.contains("Agent Queen Planner") && pass == 0 {
                     // Provider fails entirely during the planning phase
                     Err(ProviderError::ConnectionError("Planner offline".into()))
+                } else if pass == 1 {
+                    // It should fallback and proceed to assembler; then output final
+                    Ok(r#"{
+                      "tasks": [
+                        {
+                          "task_id": "final_reply",
+                          "tool_type": "reply_to_request",
+                          "description": "Final generic response",
+                          "depends_on": []
+                        }
+                      ]
+                    }"#.to_string())
                 } else {
-                    // It should fallback to empty plan and proceed to assembler
-                    Ok("Final generic response".to_string())
+                    Ok(r#"{"verdict": "ALLOWED", "failure_category": "none", "what_worked": "N/A", "what_went_wrong": "Safe", "how_to_fix": "None"}"#.to_string())
                 }
             });
 
@@ -522,6 +574,7 @@
 
         let mock_provider = MockProvider::new();
         
+        use std::sync::Arc;
         let test_dir = std::env::temp_dir().join(format!("hive_engine_test_admin_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let mut caps = AgentCapabilities::default();
         caps.admin_users.push("admin_test".into());
@@ -630,6 +683,7 @@
         use crate::engine::tests::DummyPlatform;
         use tokio::time::{sleep, Duration};
 
+        use std::sync::Arc;
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
@@ -675,6 +729,7 @@
         use crate::engine::tests::DummyPlatform;
         use tokio::time::{sleep, Duration};
 
+        use std::sync::Arc;
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
@@ -721,6 +776,7 @@
         use crate::engine::tests::DummyPlatform;
         use tokio::time::{sleep, Duration};
 
+        use std::sync::Arc;
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
@@ -766,6 +822,7 @@
         use crate::models::capabilities::AgentCapabilities;
         use tokio::time::{sleep, Duration};
         use std::sync::atomic::Ordering;
+        use std::sync::Arc;
 
         let mock_provider = MockProvider::new();
         let mut caps = AgentCapabilities::default();
@@ -781,7 +838,7 @@
         engine.capabilities = Arc::new(caps);
         
         // Toggle defaults to false
-        assert_eq!(engine.teacher.auto_train_enabled.load(Ordering::SeqCst), false);
+        assert!(!engine.teacher.auto_train_enabled.load(Ordering::SeqCst));
 
         let sender = engine.event_sender.as_ref().unwrap().clone();
         
@@ -802,5 +859,5 @@
         sleep(Duration::from_millis(300)).await;
         
         // It should have toggled to true
-        assert_eq!(train_flag.load(Ordering::SeqCst), true);
+        assert!(train_flag.load(Ordering::SeqCst));
     }

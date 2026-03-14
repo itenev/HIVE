@@ -102,7 +102,7 @@ mod tests {
         let priv_scope = Scope::Private { user_id: "alice".to_string() };
 
         // Test the structural match branches (Public/Private and Private/Public) explicitly again to be safe
-        assert_eq!(pub_scope.can_read(&priv_scope), false);
-        assert_eq!(priv_scope.can_read(&pub_scope), false);
+        assert!(!pub_scope.can_read(&priv_scope));
+        assert!(!priv_scope.can_read(&pub_scope));
     }
 }

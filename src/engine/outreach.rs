@@ -10,7 +10,6 @@
 ///   public  → public outreach channel tag
 ///   both    → DM + public
 ///   none    → blocked entirely
-
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,8 +17,10 @@ use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum OutreachFrequency {
     Low,
+    #[default]
     Medium,
     High,
     Unlimited,
@@ -45,9 +46,6 @@ impl OutreachFrequency {
     }
 }
 
-impl Default for OutreachFrequency {
-    fn default() -> Self { OutreachFrequency::Medium }
-}
 
 impl std::str::FromStr for OutreachFrequency {
     type Err = String;
@@ -64,16 +62,15 @@ impl std::str::FromStr for OutreachFrequency {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum OutreachDelivery {
+    #[default]
     Dm,
     Public,
     Both,
     None,
 }
 
-impl Default for OutreachDelivery {
-    fn default() -> Self { OutreachDelivery::Dm }
-}
 
 impl std::str::FromStr for OutreachDelivery {
     type Err = String;

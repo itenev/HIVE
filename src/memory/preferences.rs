@@ -78,11 +78,10 @@ impl PreferenceStore {
 
     pub async fn read(&self, scope: &Scope) -> PreferencesData {
         let path = self.get_preferences_path(scope);
-        if let Ok(data) = fs::read_to_string(&path).await {
-            if let Ok(prefs) = serde_json::from_str(&data) {
+        if let Ok(data) = fs::read_to_string(&path).await
+            && let Ok(prefs) = serde_json::from_str(&data) {
                 return prefs;
             }
-        }
         PreferencesData::default()
     }
 

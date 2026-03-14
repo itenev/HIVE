@@ -59,13 +59,12 @@ impl TemporalTracker {
             self.state.birthdate = Some(now_iso.clone());
         }
 
-        if let Some(last_shutdown) = &self.state.last_shutdown {
-            if let Ok(shutdown_dt) = DateTime::parse_from_rfc3339(last_shutdown) {
+        if let Some(last_shutdown) = &self.state.last_shutdown
+            && let Ok(shutdown_dt) = DateTime::parse_from_rfc3339(last_shutdown) {
                 let shutdown_dt = shutdown_dt.with_timezone(&Utc);
                 let gap = (self.uptime_start - shutdown_dt).num_seconds();
                 self.state.last_downtime_seconds = gap.max(0) as f64;
             }
-        }
 
         self.state.last_boot = Some(now_iso);
         self.state.total_boots += 1;

@@ -180,10 +180,14 @@ mod tests {
     #[tokio::test]
     async fn test_execute_outreach_missing_params() {
         use crate::providers::MockProvider;
+        use std::env;
+        
+        let dir = env::temp_dir().join(format!("hive_outreach_test_params_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+
         let mut mock_provider = MockProvider::new();
-        // Just empty mock
         mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("Mock".to_string()));
-        let gate = Arc::new(OutreachGate::new(".", Arc::new(mock_provider)));
+        let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
         
         let res = execute_outreach(
             "2".into(),
@@ -204,5 +208,129 @@ mod tests {
             None,
         ).await;
         assert_eq!(res2.status, ToolStatus::Failed("bad params".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_execute_outreach_set_frequency() {
+        use crate::providers::MockProvider;
+        use std::env;
+        let dir = env::temp_dir().join(format!("hive_outreach_test_freq_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut mock_provider = MockProvider::new();
+        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("Mock".to_string()));
+        let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
+        
+        let res = execute_outreach(
+            "4".into(),
+            "action:[set_frequency] user_id:[user456] frequency:[high]".into(),
+            Some(gate.clone()),
+            None,
+            None,
+            None,
+        ).await;
+        
+        assert_eq!(res.status, ToolStatus::Success);
+        
+        let verify = execute_outreach(
+            "4v".into(),
+            "action:[status] user_id:[user456]".into(),
+            Some(gate.clone()),
+            None,
+            None,
+            None,
+        ).await;
+        assert!(verify.output.contains("High"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_outreach_set_delivery() {
+        use crate::providers::MockProvider;
+        use std::env;
+        let dir = env::temp_dir().join(format!("hive_outreach_test_deliv_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut mock_provider = MockProvider::new();
+        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("Mock".to_string()));
+        let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
+        
+        let res = execute_outreach(
+            "5".into(),
+            "action:[set_delivery] user_id:[user789] delivery:[dm]".into(),
+            Some(gate.clone()),
+            None,
+            None,
+            None,
+        ).await;
+        
+        assert_eq!(res.status, ToolStatus::Success);
+    }
+
+    #[tokio::test]
+    async fn test_execute_outreach_send_muted() {
+        use crate::providers::MockProvider;
+        use std::env;
+        let dir = env::temp_dir().join(format!("hive_outreach_test_mute_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut mock_provider = MockProvider::new();
+        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("Mock".to_string()));
+        let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
+        
+        // Mute the user first
+        let _ = execute_outreach(
+            "6m".into(),
+            "action:[set_delivery] user_id:[user999] delivery:[none]".into(),
+            Some(gate.clone()),
+            None,
+            None,
+            None,
+        ).await;
+
+        let res = execute_outreach(
+            "6".into(),
+            "action:[send] user_id:[user999] content:[hello]".into(),
+            Some(gate.clone()),
+            None,
+            None,
+            None,
+        ).await;
+        
+        assert_eq!(res.status, ToolStatus::Failed("none_policy".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_execute_outreach_inbox_status() {
+        use crate::providers::MockProvider;
+        use std::env;
+        let dir = env::temp_dir().join(format!("hive_outreach_test_inbox_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut mock_provider = MockProvider::new();
+        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("Mock".to_string()));
+        let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
+        let inbox = Arc::new(InboxManager::new(dir.to_str().unwrap()));
+        
+        // Push a DM
+        let res = execute_outreach(
+            "7".into(),
+            "action:[send] user_id:[user111] content:[test message]".into(),
+            Some(gate.clone()),
+            Some(inbox.clone()),
+            None,
+            None,
+        ).await;
+        
+        assert_eq!(res.status, ToolStatus::Success);
+        
+        let stat = execute_outreach(
+            "8".into(),
+            "action:[inbox_status] user_id:[user111]".into(),
+            Some(gate.clone()),
+            Some(inbox.clone()),
+            None,
+            None,
+        ).await;
+        assert!(stat.output.contains("1 unread messages"));
     }
 }

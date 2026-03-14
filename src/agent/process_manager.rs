@@ -71,7 +71,7 @@ pub async fn execute_process_manager(
             
             let log_file = format!("memory/daemons/daemon_{}.log", timestamp);
             
-            let bg_cmd = format!("nohup {} > {} 2>&1 & echo $!", cmd, log_file);
+            let bg_cmd = format!("nohup bash -c '{}' > {} 2>&1 & echo \"---PID---$!\"", cmd.replace('\'', "'\\''"), log_file);
             let child = tokio::process::Command::new("bash")
                 .arg("-c")
                 .arg(&bg_cmd)
@@ -81,8 +81,18 @@ pub async fn execute_process_manager(
             match child {
                 Ok(out) => {
                     let pid_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    let pid_clean = pid_str.split_whitespace().last().unwrap_or("");
-                    if let Ok(pid) = pid_clean.parse::<u32>() {
+                    let mut pid_opt = None;
+                    for line in pid_str.lines() {
+                        if let Some(idx) = line.find("---PID---") {
+                            let remain = &line[idx + 9..];
+                            if let Ok(pid) = remain.trim().parse::<u32>() {
+                                pid_opt = Some(pid);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if let Some(pid) = pid_opt {
                         let mut map = daemons().lock().await;
                         map.insert(pid, (cmd.clone(), log_file.clone()));
                         output = format!("Daemon started successfully.\nPID: {}\nCommand: {}\nLog File: {}", pid, cmd, log_file);
@@ -174,5 +184,117 @@ pub async fn execute_process_manager(
         output,
         tokens_used: 0,
         status: ToolStatus::Success,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_process_manager_execute_success() {
+        let res = execute_process_manager(
+            "t1".to_string(),
+            "action:[execute] command:[echo 'hello world']".to_string(),
+            None,
+        )
+        .await;
+
+        assert_eq!(res.task_id, "t1");
+        assert!(res.output.contains("Command Succeeded."));
+        assert!(res.output.contains("hello world"));
+    }
+
+    #[tokio::test]
+    async fn test_process_manager_execute_failure() {
+        let res = execute_process_manager(
+            "t2".to_string(),
+            "action:[execute] command:[ls /nonexistent_directory_error_test]".to_string(),
+            None,
+        )
+        .await;
+
+        assert!(res.output.contains("Command Failed"));
+        assert!(res.output.contains("No such file or directory") || res.output.contains("No such file"));
+    }
+
+    #[tokio::test]
+    async fn test_process_manager_daemon_lifecycle() {
+        // 1. Start daemon
+        let res_start = execute_process_manager(
+            "t3".to_string(),
+            "action:[daemon] command:[sleep 2]".to_string(),
+            None,
+        )
+        .await;
+        
+        assert!(res_start.output.contains("Daemon started successfully."));
+        
+        // Extract PID
+        let pid_str = res_start.output.lines()
+            .find(|l| l.starts_with("PID:"))
+            .unwrap()
+            .split_whitespace()
+            .last()
+            .unwrap();
+            
+        // 2. List daemons (should contain our pid)
+        let res_list = execute_process_manager(
+            "t4".to_string(),
+            "action:[list]".to_string(),
+            None,
+        )
+        .await;
+        assert!(res_list.output.contains(pid_str));
+        
+        // 3. Read daemon log (might be empty but should succeed)
+        let res_read = execute_process_manager(
+            "t5".to_string(),
+            format!("action:[read] pid:[{}] lines:[10]", pid_str),
+            None,
+        )
+        .await;
+        assert!(res_read.output.contains(&format!("Daemon Logs PID {}", pid_str)));
+        
+        // 4. Kill daemon
+        let res_kill = execute_process_manager(
+            "t6".to_string(),
+            format!("action:[kill] pid:[{}]", pid_str),
+            None,
+        )
+        .await;
+        assert!(res_kill.output.contains(&format!("Force killed Daemon PID {}", pid_str)));
+        
+        // 5. List again, should be empty (or at least not have our PID)
+        let res_list_after = execute_process_manager(
+            "t7".to_string(),
+            "action:[list]".to_string(),
+            None,
+        )
+        .await;
+        assert!(!res_list_after.output.contains(&format!("PID: {}", pid_str)));
+    }
+
+    #[tokio::test]
+    async fn test_process_manager_invalid_action() {
+        let res = execute_process_manager(
+            "t8".to_string(),
+            "action:[fake_action]".to_string(),
+            None,
+        )
+        .await;
+        assert!(res.output.contains("Unknown action: fake_action"));
+    }
+
+    #[tokio::test]
+    async fn test_process_manager_missing_params() {
+        let res1 = execute_process_manager("t".to_string(), "action:[read]".to_string(), None).await;
+        assert_eq!(res1.output, "Error: Missing pid:[...]");
+
+        let res2 = execute_process_manager("t".to_string(), "action:[kill]".to_string(), None).await;
+        assert_eq!(res2.output, "Error: Missing pid:[...]");
+        
+        let res3 = execute_process_manager("t".to_string(), "action:[daemon]".to_string(), None).await;
+        assert_eq!(res3.output, "Error: Missing command:[...]");
     }
 }

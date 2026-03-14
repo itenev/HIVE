@@ -3,13 +3,15 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 use crate::models::message::Event;
 use crate::models::scope::Scope;
-use crate::engine::AgentCapabilities;
+use crate::models::capabilities::AgentCapabilities;
 use crate::teacher::Teacher;
 use crate::agent::AgentManager;
 use crate::providers::Provider;
 use crate::memory::MemoryStore;
 use crate::engine::drives::DriveSystem;
 
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip(history, telemetry_tx, platforms, agent, provider, memory, drives, capabilities, teacher), fields(event_id=%event.author_id))]
 pub async fn execute_react_loop(
     event: &Event,
     history: &[Event],
@@ -55,7 +57,7 @@ pub async fn execute_react_loop(
                 let should_continue = platform.ask_continue(channel_id, current_turn - 1).await;
                 if !should_continue {
                     context_from_agent.push_str("\n[CHECKPOINT: USER CHOSE TO WRAP UP] You MUST now use `reply_to_request` to respond to the user with a summary of everything you have accomplished so far. Do NOT invoke any more tools. Respond NOW.\n\n");
-                    println!("[AGENT LOOP] 🛑 User chose to wrap up at turn {}.", current_turn - 1);
+                    tracing::info!("[AGENT LOOP] 🛑 User chose to wrap up at turn {}.", current_turn - 1);
                 }
             }
         }
@@ -73,7 +75,7 @@ pub async fn execute_react_loop(
         let candidate_text = match provider.generate(&base_system_prompt, history, event, &context_from_agent, if current_turn == 1 { Some(telemetry_tx.clone()) } else { None }).await {
             Ok(text) => text,
             Err(e) => {
-                eprintln!("[AGENT LOOP] Provider Error: {:?}", e);
+                tracing::error!("[AGENT LOOP] Provider Error: {:?}", e);
                 format!("*System Error:* Something went wrong connecting to the provider. ({})", e)
             }
         };
@@ -87,12 +89,13 @@ pub async fn execute_react_loop(
         
         let plan = match serde_json::from_str::<crate::agent::planner::AgentPlan>(&cleaned_json) {
             Ok(p) => p,
-            Err(_) => {
+            Err(e) => {
                 context_from_agent.push_str(&format!(
                     "Turn {} - [SYSTEM COMPILER ERROR: INVISIBLE TO USER] YOUR OUTPUT WAS NOT VALID JSON. You MUST output EXACTLY one JSON block. Here is the EXACT format:\n```json\n{{\n  \"thought\": \"your reasoning here\",\n  \"tasks\": [\n    {{\n      \"task_id\": \"step_1\",\n      \"tool_type\": \"reply_to_request\",\n      \"description\": \"your response to the user here\",\n      \"depends_on\": []\n    }}\n  ]\n}}\n```\nOutput ONLY the JSON block above. No preamble, no explanation, no markdown outside the block.\n\n",
                     current_turn
                 ));
-                println!("[AGENT LOOP] 🔄 Turn {} output was not JSON. Enforcing JSON...", current_turn);
+                tracing::warn!("[AGENT LOOP] 🔄 Turn {} output was not JSON. Enforcing JSON...", current_turn);
+                tracing::error!("[AGENT LOOP] ❌ RAW TEXT THAT FAILED PARSING (serde error: {}):\n==========\n{}\n==========", e, candidate_text);
                 continue;
             }
         };
@@ -119,7 +122,7 @@ pub async fn execute_react_loop(
         }
         
         if no_tools {
-            println!("[AGENT LOOP] ⚠️ Turn {} produced no valid tools. Injecting error to prompt...", current_turn);
+            tracing::warn!("[AGENT LOOP] ⚠️ Turn {} produced no valid tools. Injecting error to prompt...", current_turn);
             context_from_agent.push_str(&format!("Turn {} - Error: [SYSTEM COMPILER ERROR: INVISIBLE TO USER] YOUR LAST RESPONSE CONTAINED NO VALID TOOLS. YOU ARE TRAPPED IN A LOOP. YOU CANNOT TALK TO THE USER DIRECTLY. To reply to the user, you MUST construct a JSON block containing the `reply_to_request` tool.\n\n", current_turn));
             continue;
         }
@@ -192,7 +195,7 @@ pub async fn execute_react_loop(
                 context_from_agent.push_str(&format!("Turn {} - Task {}: {:?}\nOutput: {}\n\n", current_turn, res.task_id, res.status, res.output));
             }
             completed_tools.extend(task_meta);
-            println!("[AGENT LOOP] 🔄 Turn {} executed {} tools. Looping...", current_turn, result_count);
+            tracing::info!("[AGENT LOOP] 🔄 Turn {} executed {} tools. Looping...", current_turn, result_count);
         }
         
         if let Some(reply) = reply_task {
@@ -226,7 +229,7 @@ pub async fn execute_react_loop(
                         }
                     }
                 }
-                println!("[AGENT LOOP] ✅ Final answer approved by Observer on turn {}.", current_turn);
+                tracing::info!("[AGENT LOOP] ✅ Final answer approved by Observer on turn {}.", current_turn);
                 final_response_text = candidate_answer;
                 break;
             } else {
@@ -235,7 +238,7 @@ pub async fn execute_react_loop(
                     audit_result.failure_category.clone(),
                     audit_result.what_went_wrong.clone(),
                 ));
-                println!("[OBSERVER BLOCKED]\nCategory: {}\nWhat Worked: {}\nWhat Went Wrong: {}\nHow to Fix: {}", audit_result.failure_category, audit_result.what_worked, audit_result.what_went_wrong, audit_result.how_to_fix);
+                tracing::warn!("[OBSERVER BLOCKED]\nCategory: {}\nWhat Worked: {}\nWhat Went Wrong: {}\nHow to Fix: {}", audit_result.failure_category, audit_result.what_worked, audit_result.what_went_wrong, audit_result.how_to_fix);
                 
                 let guidance = format!("[INTERNAL AUDIT: INVISIBLE TO USER] CORRECTION REQUIRED FOR YOUR REPLY\nFAILURE CATEGORY: {}\nWHAT WORKED: {}\nWHAT WENT WRONG: {}\nHOW TO FIX: {}\n\n", audit_result.failure_category, audit_result.what_worked, audit_result.what_went_wrong, audit_result.how_to_fix);
                 context_from_agent.push_str(&guidance);

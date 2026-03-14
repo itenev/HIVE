@@ -10,24 +10,28 @@ pub mod planner;
 pub mod tool;
 pub mod preferences;
 pub mod synthesis;
-pub mod synthesis_drone;
+pub mod synthesis_tool;
 pub mod outreach;
 pub mod skills;
 pub mod routines;
 pub mod process_manager;
-pub mod lessons_drone;
-pub mod turing_drone;
-pub mod web_drone;
-pub mod image_drone;
-pub mod tts_drone;
+pub mod lessons_tool;
+pub mod turing_tool;
+pub mod web_tool;
+pub mod image_tool;
+pub mod tts_tool;
 pub mod file_reader;
 pub mod file_writer;
 pub mod registry;
-pub mod timeline_drone;
-pub mod scratchpad_drone;
-pub mod synaptic_drone;
-pub mod core_memory_drone;
-
+pub mod timeline_tool;
+pub mod scratchpad_tool;
+pub mod synaptic_tool;
+pub mod core_memory_tool;
+pub mod file_system_tool;
+pub mod autonomy_tool;
+pub mod reasoning_tool;
+pub mod attachment_tool;
+pub mod log_tool;
 pub struct AgentManager {
     registry: HashMap<String, ToolTemplate>,
     discord_tools: HashMap<String, ToolTemplate>,
@@ -271,7 +275,7 @@ impl AgentManager {
         let mut futures = vec![];
 
         for task in plan.tasks {
-            if let Some(handle) = crate::agent::registry::dispatch_native_tool(
+            if let Some(handle) = crate::agent::registry::execution::dispatch_native_tool(
                 &task,
                 context,
                 &scope,

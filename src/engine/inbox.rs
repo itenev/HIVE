@@ -6,7 +6,6 @@
 ///   mute    → messages from Apis are blocked entirely
 ///
 /// Stored at: memory/inbox/{user_id}.json
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -16,8 +15,10 @@ const MAX_INBOX_SIZE: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum InboxPriority {
     Notify,
+    #[default]
     Normal,
     Mute,
 }
@@ -59,11 +60,6 @@ struct InboxData {
     priority: InboxPriority,
 }
 
-impl Default for InboxPriority {
-    fn default() -> Self {
-        InboxPriority::Normal
-    }
-}
 
 fn inbox_path(project_root: &str, user_id: &str) -> PathBuf {
     PathBuf::from(project_root)

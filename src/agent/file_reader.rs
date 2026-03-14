@@ -4,11 +4,10 @@ use tokio::sync::mpsc;
 fn extract_tag(desc: &str, tag: &str) -> Option<String> {
     if let Some(start_idx) = desc.find(tag) {
         let after_tag = &desc[start_idx + tag.len()..];
-        if after_tag.starts_with('[') {
-            if let Some(end_idx) = after_tag.find(']') {
+        if after_tag.starts_with('[')
+            && let Some(end_idx) = after_tag.find(']') {
                 return Some(after_tag[1..end_idx].trim().to_string());
             }
-        }
     }
     None
 }

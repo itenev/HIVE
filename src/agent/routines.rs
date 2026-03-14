@@ -6,11 +6,10 @@ use tokio::sync::mpsc;
 fn extract_tag(desc: &str, tag: &str) -> Option<String> {
     if let Some(start_idx) = desc.find(tag) {
         let after_tag = &desc[start_idx + tag.len()..];
-        if after_tag.starts_with('[') {
-            if let Some(end_idx) = after_tag.find(']') {
+        if after_tag.starts_with('[')
+            && let Some(end_idx) = after_tag.find(']') {
                 return Some(after_tag[1..end_idx].trim().to_string());
             }
-        }
     }
     None
 }
@@ -51,11 +50,10 @@ pub async fn execute_manage_routine(
             let mut entries = vec![];
             if let Ok(mut rd) = tokio::fs::read_dir(&routines_dir).await {
                 while let Ok(Some(entry)) = rd.next_entry().await {
-                    if let Ok(name) = entry.file_name().into_string() {
-                        if name.ends_with(".md") {
+                    if let Ok(name) = entry.file_name().into_string()
+                        && name.ends_with(".md") {
                             entries.push(name);
                         }
-                    }
                 }
             }
             if entries.is_empty() {
@@ -119,7 +117,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_routines_drone_execute() {
+    async fn test_routines_tool_execute() {
         let mem = Arc::new(MemoryStore::default());
         
         // Test Traversal Protection
@@ -136,6 +134,7 @@ mod tests {
 
         // Test Create Success
         let res = execute_manage_routine("4".into(), "action:[create] name:[my_rule.md] content:[Wash hand]".into(), mem.clone(), None).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(res.output.contains("Successfully created"));
 
         // Test List

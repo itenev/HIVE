@@ -6,11 +6,10 @@ use tokio::sync::mpsc;
 fn extract_tag(desc: &str, tag: &str) -> Option<String> {
     if let Some(start_idx) = desc.find(tag) {
         let after_tag = &desc[start_idx + tag.len()..];
-        if after_tag.starts_with('[') {
-            if let Some(end_idx) = after_tag.find(']') {
+        if after_tag.starts_with('[')
+            && let Some(end_idx) = after_tag.find(']') {
                 return Some(after_tag[1..end_idx].trim().to_string());
             }
-        }
     }
     None
 }
@@ -61,11 +60,10 @@ pub async fn execute_manage_skill(
             let mut entries = vec![];
             if let Ok(mut rd) = tokio::fs::read_dir(&skills_dir).await {
                 while let Ok(Some(entry)) = rd.next_entry().await {
-                    if let Ok(name) = entry.file_name().into_string() {
-                        if name.ends_with(".py") || name.ends_with(".sh") {
+                    if let Ok(name) = entry.file_name().into_string()
+                        && (name.ends_with(".py") || name.ends_with(".sh")) {
                             entries.push(name);
                         }
-                    }
                 }
             }
             if entries.is_empty() {
@@ -161,7 +159,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_skills_drone_execute() {
+    async fn test_skills_tool_execute() {
         let mem = Arc::new(MemoryStore::default());
         
         // 1. Not admin
@@ -183,11 +181,13 @@ mod tests {
         // 5. Create valid Python
         let py_code = "action:[create] name:[hello.py] content:[print(\"Hello Python\")]";
         let res = execute_manage_skill("5".into(), py_code.into(), true, mem.clone(), None).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(res.output.contains("Successfully created"));
 
         // 6. Create valid Bash
         let sh_code = "action:[create] name:[hello.sh] content:[echo \"Hello Bash\"]";
         let res = execute_manage_skill("6".into(), sh_code.into(), true, mem.clone(), None).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(res.output.contains("Successfully created"));
 
         // 7. List
