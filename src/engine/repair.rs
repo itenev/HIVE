@@ -15,13 +15,13 @@ pub fn repair_planner_json(raw: &str) -> String {
         // Found a ```json block, extract everything after the marker
         s = s[start_idx + json_start_marker.len()..].to_string();
         // Find the first closing fence (not rfind)
-        if let Some(end_idx) = s.find("```") {
+        if let Some(end_idx) = s.rfind("```") {
             s = s[..end_idx].to_string();
         }
     } else if let Some(start_idx) = s.find(generic_start_marker) {
          // Found a generic ``` block
         s = s[start_idx + generic_start_marker.len()..].to_string();
-        if let Some(end_idx) = s.find("```") {
+        if let Some(end_idx) = s.rfind("```") {
              s = s[..end_idx].to_string();
         }
     }
