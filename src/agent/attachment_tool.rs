@@ -60,13 +60,13 @@ pub async fn execute_read_attachment(
                     }
                     if let Ok(text) = String::from_utf8(bytes.to_vec()) {
                         let output_text = if text.len() > 30_000 {
-                            format!("{}...\n\n[TRUNCATED: showing first 30KB of {} total bytes]\n[READING INCOMPLETE — The file was truncated at 30KB. If you need more, you cannot use this tool.]", &text[..30_000], size)
+                            format!("{}...\n\n[TRUNCATED: original length {} bytes]", &text[..30_000], size)
                         } else {
-                            format!("{}\n\n[DOCUMENT COMPLETE]", text)
+                            text // Return raw text without any formatting headers
                         };
                         ToolResult {
                             task_id,
-                            output: format!("--- ATTACHMENT ({} bytes) ---\n{}", size, output_text),
+                            output: output_text,
                             tokens_used: 0,
                             status: ToolStatus::Success,
                         }
