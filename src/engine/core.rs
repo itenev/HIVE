@@ -96,6 +96,8 @@ impl Engine {
 
         // Autonomy loop: self-event timer after 5 min idle
         let mut autonomy_handle: Option<tokio::task::JoinHandle<()>> = None;
+        // PREEMPTION: Track active autonomy ReAct loop so it can be aborted on user messages
+        let mut active_autonomy_task: Option<tokio::task::JoinHandle<()>> = None;
 
         // Main Event Loop
         while let Some(event) = self.event_receiver.recv().await {
@@ -103,6 +105,22 @@ impl Engine {
             // Cancel any pending autonomy timer when a real event arrives
             if let Some(handle) = autonomy_handle.take() {
                 handle.abort();
+            }
+
+            // PREEMPTION: If a user message arrives while autonomy is actively running,
+            // abort the autonomy ReAct loop immediately to free the GPU.
+            if event.author_id != "apis_autonomy" {
+                if let Some(task) = active_autonomy_task.take() {
+                    tracing::warn!("[PREEMPTION] 🛑 User message arrived! Aborting active autonomy ReAct loop to prioritize user.");
+                    task.abort();
+                    // CRITICAL: Await the abort to ensure the HTTP stream to Ollama is fully
+                    // dropped. Without this, the engine races ahead to the user's ReAct loop
+                    // while Ollama is still generating for autonomy (MoE on Metal = no parallel).
+                    let _ = task.await;
+                    // Brief pause for Ollama to detect the client disconnect and release the GPU lock.
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                    tracing::info!("[PREEMPTION] ✅ Autonomy task fully cancelled. GPU released for user request.");
+                }
             }
             
             // 0. Intercept System Commands (/clean or /clear)
@@ -306,8 +324,121 @@ impl Engine {
                 }
             });
 
-            // 4. Multi-Turn Agentic Action Loop
-            let (response_text, current_turn, completed_tools) = crate::engine::react::execute_react_loop(
+            // 4. AUTONOMY PREEMPTION GATE
+            // Autonomy events are spawned as background tasks so the event loop stays free.
+            // User events continue to block inline (single-GPU, one user at a time is fine).
+            if event.author_id == "apis_autonomy" {
+                let platforms_bg = self.platforms.clone();
+                let agent_bg = self.agent.clone();
+                let provider_bg = self.provider.clone();
+                let memory_bg = self.memory.clone();
+                let drives_bg = self.drives.clone();
+                let capabilities_bg = self.capabilities.clone();
+                let teacher_bg = self.teacher.clone();
+                let autonomy_sender_bg = autonomy_sender.clone();
+
+                active_autonomy_task = Some(tokio::spawn(async move {
+                    let (response_text, current_turn, completed_tools) = crate::engine::react::execute_react_loop(
+                        &event,
+                        &history,
+                        telemetry_tx.clone(),
+                        &platforms_bg,
+                        &agent_bg,
+                        provider_bg,
+                        memory_bg.clone(),
+                        drives_bg,
+                        capabilities_bg,
+                        teacher_bg,
+                    ).await;
+
+                    let response = Response {
+                        platform: event.platform.clone(),
+                        target_scope: event.scope.clone(),
+                        text: response_text.clone(),
+                        is_telemetry: false,
+                    };
+
+                    // Store response in memory
+                    let apis_event = Event {
+                        platform: response.platform.clone(),
+                        scope: response.target_scope.clone(),
+                        author_name: "Apis".to_string(),
+                        author_id: "test".into(),
+                        content: response.text.clone(),
+                    };
+                    memory_bg.add_event(apis_event).await;
+
+                    // Route response to platform
+                    if let Some(platform) = platforms_bg.get(response.platform.split(':').next().unwrap_or("")) {
+                        if let Err(e) = platform.send(response).await {
+                            tracing::error!("[AUTONOMY] Error sending response: {}", e);
+                        }
+                    }
+
+                    // Log autonomy session
+                    let log_entry = serde_json::json!({
+                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                        "turn_count": current_turn,
+                        "tools_used": completed_tools.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(),
+                        "summary": response_text.clone(),
+                    });
+                    tokio::spawn(async move {
+                        let dir = std::path::Path::new("memory/autonomy");
+                        let _ = tokio::fs::create_dir_all(dir).await;
+                        let path = dir.join("activity.jsonl");
+                        let line = format!("{}\n", log_entry);
+                        if let Ok(mut f) = tokio::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&path)
+                            .await
+                        {
+                            use tokio::io::AsyncWriteExt;
+                            let _ = f.write_all(line.as_bytes()).await;
+                        }
+                    });
+
+                    // Restart autonomy timer after completion
+                    if let Some(ref sender) = autonomy_sender_bg {
+                        let sender_clone = sender.clone();
+                        let memory_clone = memory_bg.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+                            tracing::info!("[AUTONOMY] 🐝 5-minute idle timer fired. Entering Continuous Autonomy mode.");
+                            let public_narrative = memory_clone.get_public_narrative().await;
+                            let autonomy_event = Event {
+                                platform: "discord:1480192647657427044".to_string(),
+                                scope: Scope::Public {
+                                    channel_id: "1480192647657427044".to_string(),
+                                    user_id: "apis_autonomy".to_string(),
+                                },
+                                author_name: "Apis".to_string(),
+                                author_id: "apis_autonomy".into(),
+                                content: format!(
+                                    "You are now in Continuous Autonomy mode. You have 5 minutes of idle time.\n\n\
+                                    {}\n\n\
+                                    CRITICAL DIRECTIVE: This is an UNSUPERVISED, INTERNAL AUTONOMY SESSION. You are alone. \
+                                    You MUST NOT speak to users, you MUST NOT write conversational stories about them, and you MUST NOT address anyone directly. \
+                                    This is your private internal monologue. \
+                                    \n\n\
+                                    Use this time productively. Consider the public engagement narrative above and diversify your autonomous work. \
+                                    Ideas: review your memory, consolidate lessons, practice skills, explore your Turing Grid, run routines, \
+                                    do research, or anything you find valuable for self-improvement. \
+                                    Report your internal monologue and actions in your final reply.",
+                                    public_narrative
+                                ),
+                            };
+                            let _ = sender_clone.send(autonomy_event).await;
+                        });
+                    }
+                }));
+
+                tracing::info!("[AUTONOMY] 🐝 Spawned autonomy ReAct loop as preemptible background task.");
+                continue; // Don't block — immediately return to listening for user events
+            }
+
+            // 4b. Normal user event — process inline (blocking is fine for single-GPU)
+            let (response_text, _current_turn, _completed_tools) = crate::engine::react::execute_react_loop(
                 &event,
                 &history,
                 telemetry_tx.clone(),
@@ -344,31 +475,6 @@ impl Engine {
                 }
             } else {
                 tracing::warn!("Received event from unknown platform: {}", response.platform);
-            }
-
-            // 7.1. Log autonomy sessions for later introspection
-            if event.author_id == "apis_autonomy" {
-                let log_entry = serde_json::json!({
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                    "turn_count": current_turn,
-                    "tools_used": completed_tools.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(),
-                    "summary": response_text.clone(),
-                });
-                tokio::spawn(async move {
-                    let dir = std::path::Path::new("memory/autonomy");
-                    let _ = tokio::fs::create_dir_all(dir).await;
-                    let path = dir.join("activity.jsonl");
-                    let line = format!("{}\n", log_entry);
-                    if let Ok(mut f) = tokio::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&path)
-                        .await
-                    {
-                        use tokio::io::AsyncWriteExt;
-                        let _ = f.write_all(line.as_bytes()).await;
-                    }
-                });
             }
 
             // 7.5. Spawn Continuous Autonomy timer (5 min)
