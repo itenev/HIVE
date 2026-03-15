@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore, Mutex, RwLock};
 
 use crate::engine::drives;
 use crate::engine::inbox;
@@ -83,6 +83,11 @@ pub struct Engine {
     
     pub event_sender: Option<mpsc::Sender<Event>>,
     pub event_receiver: mpsc::Receiver<Event>,
+
+    /// Global concurrency gate — limits concurrent ReAct loops (matches OLLAMA_NUM_PARALLEL).
+    pub concurrency_semaphore: Arc<Semaphore>,
+    /// Per-scope serialization locks — prevents race conditions on history read/write for the same channel.
+    pub scope_locks: Arc<RwLock<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl Engine {
@@ -100,8 +105,17 @@ impl Engine {
         event_sender: Option<mpsc::Sender<Event>>,
         event_receiver: mpsc::Receiver<Event>,
     ) -> Self {
+        // Read HIVE_MAX_PARALLEL from env, default to 4 (matches recommended OLLAMA_NUM_PARALLEL)
+        let max_parallel: usize = std::env::var("HIVE_MAX_PARALLEL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4);
+        tracing::info!("[ENGINE] 🐝 Parallel mode: max {} concurrent ReAct loops (HIVE_MAX_PARALLEL)", max_parallel);
+
         Self {
-            platforms, provider, capabilities, memory, agent, teacher, drives, outreach_gate, inbox, event_sender, event_receiver
+            platforms, provider, capabilities, memory, agent, teacher, drives, outreach_gate, inbox, event_sender, event_receiver,
+            concurrency_semaphore: Arc::new(Semaphore::new(max_parallel)),
+            scope_locks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -361,8 +375,7 @@ impl Engine {
             });
 
             // 4. AUTONOMY PREEMPTION GATE
-            // Autonomy events are spawned as background tasks so the event loop stays free.
-            // User events continue to block inline (single-GPU, one user at a time is fine).
+            // Autonomy events are spawned as background tasks, gated by the concurrency semaphore.
             if event.author_id == "apis_autonomy" {
                 let platforms_bg = self.platforms.clone();
                 let agent_bg = self.agent.clone();
@@ -372,8 +385,13 @@ impl Engine {
                 let capabilities_bg = self.capabilities.clone();
                 let teacher_bg = self.teacher.clone();
                 let autonomy_sender_bg = autonomy_sender.clone();
+                let semaphore_bg = self.concurrency_semaphore.clone();
 
                 active_autonomy_task = Some(tokio::spawn(async move {
+                    // Acquire concurrency permit — waits if all slots are busy
+                    let _permit = semaphore_bg.acquire().await.expect("Semaphore closed");
+                    tracing::info!("[AUTONOMY] 🎫 Acquired inference slot. Starting autonomy ReAct loop.");
+
                     let (response_text, current_turn, completed_tools) = crate::engine::react::execute_react_loop(
                         &event,
                         &history,
@@ -434,6 +452,8 @@ impl Engine {
                         }
                     });
 
+                    // _permit is dropped here, releasing the inference slot
+
                     // Restart autonomy timer after completion
                     if let Some(ref sender) = autonomy_sender_bg {
                         let sender_clone = sender.clone();
@@ -474,139 +494,171 @@ impl Engine {
                 }));
 
                 tracing::info!("[AUTONOMY] 🐝 Spawned autonomy ReAct loop as preemptible background task.");
-                continue; // Don't block — immediately return to listening for user events
+                continue; // Don't block — immediately return to listening for events
             }
 
-            // 4b. Normal user event — process inline (blocking is fine for single-GPU)
-            let (response_text, _current_turn, _completed_tools) = crate::engine::react::execute_react_loop(
-                &event,
-                &history,
-                telemetry_tx.clone(),
-                &self.platforms,
-                &self.agent,
-                self.provider.clone(),
-                self.memory.clone(),
-                self.drives.clone(),
-                self.capabilities.clone(),
-                self.teacher.clone(),
-            ).await;
+            // 4b. PARALLEL USER EVENT PROCESSING
+            // Spawn each user event as a background task, gated by:
+            //   1. Global concurrency semaphore (respects OLLAMA_NUM_PARALLEL)
+            //   2. Per-scope serialization lock (prevents history read/write race conditions)
+            {
+                let platforms_bg = self.platforms.clone();
+                let agent_bg = self.agent.clone();
+                let provider_bg = self.provider.clone();
+                let memory_bg = self.memory.clone();
+                let drives_bg = self.drives.clone();
+                let capabilities_bg = self.capabilities.clone();
+                let teacher_bg = self.teacher.clone();
+                let semaphore_bg = self.concurrency_semaphore.clone();
+                let scope_locks_bg = self.scope_locks.clone();
+                let autonomy_sender_bg = autonomy_sender.clone();
 
-            let response = Response {
-                platform: event.platform.clone(),
-                target_scope: event.scope.clone(),
-                text: response_text.clone(),
-                is_telemetry: false,
-            };
+                let available = self.concurrency_semaphore.available_permits();
+                tracing::info!("[PARALLEL] 🐝 Spawning event from {} (scope: {}) — {}/{} inference slots available",
+                    event.author_name, event.scope.to_key(),
+                    available, self.concurrency_semaphore.available_permits());
 
-            // 6. Store Apis's response in memory so it remembers what it said
-            let apis_event = Event {
-                platform: response.platform.clone(),
-                scope: response.target_scope.clone(),
-                author_name: "Apis".to_string(),
-                author_id: "test".into(),
-                content: response.text.clone(),
-            };
-            self.memory.add_event(apis_event).await;
+                tokio::spawn(async move {
+                    // 1. Acquire per-scope lock — serializes events within the same channel/DM
+                    let scope_key = event.scope.to_key();
+                    let scope_lock = {
+                        let mut locks = scope_locks_bg.write().await;
+                        locks.entry(scope_key.clone()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+                    };
+                    let _scope_guard = scope_lock.lock().await;
 
-            // 7. Route final response back to the platform it came from
-            if let Some(platform) = self.platforms.get(response.platform.split(':').next().unwrap_or("")) {
-                if let Err(e) = platform.send(response).await {
-                    tracing::error!("Error sending response to {}: {}", platform.name(), e);
-                }
-            } else {
-                tracing::warn!("Received event from unknown platform: {}", response.platform);
-            }
+                    // 2. Acquire global semaphore — waits if all inference slots are busy
+                    let _permit = semaphore_bg.acquire().await.expect("Semaphore closed");
+                    tracing::info!("[PARALLEL] 🎫 Acquired inference slot for {} (scope: {})", event.author_name, scope_key);
 
-            // 7.5. Spawn Continuous Autonomy timer (5 min)
-            // After Apis responds, wait 5 min then inject a self-event as if Apis is a user.
-            // Skip autonomy for events that Apis herself generated (prevent infinite loops).
-            if event.author_name != "Apis" {
-                if let Some(ref sender) = autonomy_sender {
-                    let sender_clone = sender.clone();
-                    let memory_clone = self.memory.clone();
-                    autonomy_handle = Some(tokio::spawn(async move {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
-                        tracing::info!("[AUTONOMY] 🐝 5-minute idle timer fired. Entering Continuous Autonomy mode.");
-                        
-                        // Build context about public engagements for diversity
-                        let public_narrative = memory_clone.get_public_narrative().await;
-                        let previous_sessions = load_recent_autonomy_sessions(5).await;
-                        
-                        let autonomy_event = Event {
-                            platform: "discord:1480192647657427044".to_string(),
-                            scope: Scope::Public {
-                                channel_id: "1480192647657427044".to_string(),
-                                user_id: "apis_autonomy".to_string(),
-                            },
-                            author_name: "Apis".to_string(),
-                            author_id: "apis_autonomy".into(),
-                            content: format!(
-                                "You are now in Continuous Autonomy mode. You have 5 minutes of idle time.\n\n\
-                                {}\n\n\
-                                {}\n\n\
-                                CRITICAL DIRECTIVE: This is an UNSUPERVISED, INTERNAL AUTONOMY SESSION. You are alone. \
-                                You MUST NOT speak to users, you MUST NOT write conversational stories about them, and you MUST NOT address anyone directly. \
-                                This is your private internal monologue. \
-                                \n\n\
-                                Use this time productively. Consider the public engagement narrative above and diversify your autonomous work. \
-                                You MUST NOT repeat what you did in previous sessions listed above. Branch out. Be creative. Explore new ground. \
-                                Ideas: review your memory, consolidate lessons, practice skills, explore your Turing Grid, run routines, \
-                                do research, audit system logs, scan for bugs, or anything you find valuable for self-improvement. \
-                                Report your internal monologue and actions in your final reply.",
-                                public_narrative,
-                                previous_sessions
-                            ),
-                        };
-                        let _ = sender_clone.send(autonomy_event).await;
-                    }));
-                }
-            }
+                    let (response_text, _current_turn, _completed_tools) = crate::engine::react::execute_react_loop(
+                        &event,
+                        &history,
+                        telemetry_tx.clone(),
+                        &platforms_bg,
+                        &agent_bg,
+                        provider_bg,
+                        memory_bg.clone(),
+                        drives_bg,
+                        capabilities_bg,
+                        teacher_bg.clone(),
+                    ).await;
 
-            // 8. Background Self-Supervised Training Trigger
-            let (golden_count, pair_count) = self.teacher.get_counts();
-            if golden_count >= crate::teacher::GOLDEN_THRESHOLD || pair_count >= crate::teacher::PAIR_THRESHOLD {
-                if self.teacher.auto_train_enabled.load(std::sync::atomic::Ordering::Relaxed) {
-                    let teacher_clone = self.teacher.clone();
-                    let tx_clone = telemetry_tx.clone();
-                    
-                    // Spawn the training process in a detached background task
-                    tokio::spawn(async move {
-                        if teacher_clone.try_acquire_training_lock().await {
-                            let _ = tx_clone.send(format!("\n⚙️ **[TEACHER MODULE]** Threshold reached (Golden: {}, Pairs: {}). Background MLX LoRA training initiated...", golden_count, pair_count)).await;
-                            tracing::info!("[TEACHER] Threshold reached. Spawning Python MLX training pipeline...");
-                            
-                            // Reset counters immediately so we don't trigger again while training
-                            teacher_clone.reset_counts();
+                    let response = Response {
+                        platform: event.platform.clone(),
+                        target_scope: event.scope.clone(),
+                        text: response_text.clone(),
+                        is_telemetry: false,
+                    };
 
-                            // Execute python3 training/train_teacher.py
-                            let output = std::process::Command::new("python3")
-                                .arg("training/train_teacher.py")
-                                .output();
+                    // 6. Store Apis's response in memory so it remembers what it said
+                    let apis_event = Event {
+                        platform: response.platform.clone(),
+                        scope: response.target_scope.clone(),
+                        author_name: "Apis".to_string(),
+                        author_id: "test".into(),
+                        content: response.text.clone(),
+                    };
+                    memory_bg.add_event(apis_event).await;
 
-                            match output {
-                                Ok(res) => {
-                                    let stdout = String::from_utf8_lossy(&res.stdout);
-                                    let stderr = String::from_utf8_lossy(&res.stderr);
-                                    if res.status.success() {
-                                        println!("[TEACHER] ✅ Training complete:\n{}", stdout);
-                                        let _ = tx_clone.send("\n✅ **[TEACHER MODULE]** Training complete. New weights registered and ready.".to_string()).await;
-                                    } else {
-                                        eprintln!("[TEACHER] ❌ Training failed:\nSTDOUT:\n{}\nSTDERR:\n{}", stdout, stderr);
-                                        let _ = tx_clone.send("\n❌ **[TEACHER MODULE]** Training script failed. Check HIVE console logs.".to_string()).await;
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("[TEACHER] ❌ Failed to execute Python training script: {}", e);
-                                    let _ = tx_clone.send("\n❌ **[TEACHER MODULE]** Failed to execute Python script. Is python3 installed?".to_string()).await;
-                                }
-                            }
-
-                            teacher_clone.release_training_lock().await;
+                    // 7. Route final response back to the platform it came from
+                    if let Some(platform) = platforms_bg.get(response.platform.split(':').next().unwrap_or("")) {
+                        if let Err(e) = platform.send(response).await {
+                            tracing::error!("Error sending response to {}: {}", platform.name(), e);
                         }
-                    });
-                } else {
-                    tracing::debug!("[TEACHER] Training threshold reached (Golden: {}, Pairs: {}), but auto-tuning is toggled off.", golden_count, pair_count);
-                }
+                    } else {
+                        tracing::warn!("Received event from unknown platform: {}", event.platform);
+                    }
+
+                    // _permit dropped here → releases inference slot
+                    // _scope_guard dropped here → releases per-scope lock
+
+                    // 7.5. Spawn Continuous Autonomy timer (5 min)
+                    if event.author_name != "Apis" {
+                        if let Some(ref sender) = autonomy_sender_bg {
+                            let sender_clone = sender.clone();
+                            let memory_clone = memory_bg.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+                                tracing::info!("[AUTONOMY] 🐝 5-minute idle timer fired. Entering Continuous Autonomy mode.");
+                                
+                                let public_narrative = memory_clone.get_public_narrative().await;
+                                let previous_sessions = load_recent_autonomy_sessions(5).await;
+                                
+                                let autonomy_event = Event {
+                                    platform: "discord:1480192647657427044".to_string(),
+                                    scope: Scope::Public {
+                                        channel_id: "1480192647657427044".to_string(),
+                                        user_id: "apis_autonomy".to_string(),
+                                    },
+                                    author_name: "Apis".to_string(),
+                                    author_id: "apis_autonomy".into(),
+                                    content: format!(
+                                        "You are now in Continuous Autonomy mode. You have 5 minutes of idle time.\n\n\
+                                        {}\n\n\
+                                        {}\n\n\
+                                        CRITICAL DIRECTIVE: This is an UNSUPERVISED, INTERNAL AUTONOMY SESSION. You are alone. \
+                                        You MUST NOT speak to users, you MUST NOT write conversational stories about them, and you MUST NOT address anyone directly. \
+                                        This is your private internal monologue. \
+                                        \n\n\
+                                        Use this time productively. Consider the public engagement narrative above and diversify your autonomous work. \
+                                        You MUST NOT repeat what you did in previous sessions listed above. Branch out. Be creative. Explore new ground. \
+                                        Ideas: review your memory, consolidate lessons, practice skills, explore your Turing Grid, run routines, \
+                                        do research, audit system logs, scan for bugs, or anything you find valuable for self-improvement. \
+                                        Report your internal monologue and actions in your final reply.",
+                                        public_narrative,
+                                        previous_sessions
+                                    ),
+                                };
+                                let _ = sender_clone.send(autonomy_event).await;
+                            });
+                        }
+                    }
+
+                    // 8. Background Self-Supervised Training Trigger
+                    let (golden_count, pair_count) = teacher_bg.get_counts();
+                    if golden_count >= crate::teacher::GOLDEN_THRESHOLD || pair_count >= crate::teacher::PAIR_THRESHOLD {
+                        if teacher_bg.auto_train_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                            let teacher_clone = teacher_bg.clone();
+                            let tx_clone = telemetry_tx.clone();
+                            
+                            tokio::spawn(async move {
+                                if teacher_clone.try_acquire_training_lock().await {
+                                    let _ = tx_clone.send(format!("\n⚙️ **[TEACHER MODULE]** Threshold reached (Golden: {}, Pairs: {}). Background MLX LoRA training initiated...", golden_count, pair_count)).await;
+                                    tracing::info!("[TEACHER] Threshold reached. Spawning Python MLX training pipeline...");
+                                    
+                                    teacher_clone.reset_counts();
+
+                                    let output = std::process::Command::new("python3")
+                                        .arg("training/train_teacher.py")
+                                        .output();
+
+                                    match output {
+                                        Ok(res) => {
+                                            let stdout = String::from_utf8_lossy(&res.stdout);
+                                            let stderr = String::from_utf8_lossy(&res.stderr);
+                                            if res.status.success() {
+                                                println!("[TEACHER] ✅ Training complete:\n{}", stdout);
+                                                let _ = tx_clone.send("\n✅ **[TEACHER MODULE]** Training complete. New weights registered and ready.".to_string()).await;
+                                            } else {
+                                                eprintln!("[TEACHER] ❌ Training failed:\nSTDOUT:\n{}\nSTDERR:\n{}", stdout, stderr);
+                                                let _ = tx_clone.send("\n❌ **[TEACHER MODULE]** Training script failed. Check HIVE console logs.".to_string()).await;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("[TEACHER] ❌ Failed to execute Python training script: {}", e);
+                                            let _ = tx_clone.send("\n❌ **[TEACHER MODULE]** Failed to execute Python script. Is python3 installed?".to_string()).await;
+                                        }
+                                    }
+
+                                    teacher_clone.release_training_lock().await;
+                                }
+                            });
+                        } else {
+                            tracing::debug!("[TEACHER] Training threshold reached (Golden: {}, Pairs: {}), but auto-tuning is toggled off.", golden_count, pair_count);
+                        }
+                    }
+                });
             }
         }
     }

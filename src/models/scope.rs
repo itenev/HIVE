@@ -41,6 +41,14 @@ impl Scope {
             }
         }
     }
+
+    /// Returns a unique string key for this scope, used for per-scope serialization locks.
+    pub fn to_key(&self) -> String {
+        match self {
+            Scope::Public { channel_id, user_id } => format!("pub_{}_{}", channel_id, user_id),
+            Scope::Private { user_id } => format!("priv_{}", user_id),
+        }
+    }
 }
 
 #[cfg(test)]
