@@ -34,18 +34,33 @@ fn get_reader() -> Box<dyn AsyncBufRead + Unpin + Send + Sync> {
 
 #[cfg(not(tarpaulin_include))]
 pub async fn run_app() {
-    let file_appender = tracing_appender::rolling::daily("logs", "hive.log");
+    // ── Master Rotating Log ─────────────────────────────────────────────
+    // Daily rotation with max 7 rotated files (+ current = 8 on disk).
+    // All subsystem logs ([ENGINE:*], [MEMORY:*], [AGENT:*], etc.) merge
+    // into a single master file: logs/hive.log.YYYY-MM-DD
+    let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("hive")
+        .filename_suffix("log")
+        .max_log_files(8)
+        .build("logs")
+        .expect("Failed to create log appender");
+
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-    
-    // Set up standard tracing subscriber with EnvFilter for dynamic verbosity
+
+    // Dynamic verbosity via RUST_LOG env var (default: info globally, debug for HIVE)
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,HIVE=debug"));
 
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_writer(std::io::stdout.and(non_blocking))
+        .with_target(true)          // Tags each line with the Rust module path (e.g. HIVE::engine::core)
+        .with_thread_ids(true)      // Thread IDs for concurrency debugging
+        .with_file(true)            // Source file name on every log line
+        .with_line_number(true)     // Source line number on every log line
         .finish();
-        
+
     let _ = tracing::subscriber::set_global_default(subscriber);
 
     tracing::info!("Starting HIVE initialization sequence...");
@@ -76,6 +91,7 @@ pub async fn run_app() {
             "run_bash_command".into(),
             "process_manager".into(),
             "file_system_operator".into(),
+            "download".into(),
         ],
         default_tools: native_tools, // <-- Dynamically Assigned 
     };
@@ -88,6 +104,85 @@ pub async fn run_app() {
         .with_capabilities(capabilities)
         .build()
         .expect("Failed to build Engine");
+
+    // 5. Spawn the file server daemon (serves generated + downloaded files over HTTP)
+    {
+        let port: u16 = std::env::var("HIVE_FILE_SERVER_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8420);
+        let token = std::env::var("HIVE_FILE_TOKEN").unwrap_or_default();
+        tokio::spawn(async move {
+            // Retry loop — handles port conflict on rapid restarts
+            loop {
+                let server = crate::computer::file_server::FileServer::new(port, token.clone());
+                match server.run().await {
+                    Ok(_) => break,
+                    Err(e) => {
+                        tracing::warn!("[FILE SERVER] Port {} unavailable: {} — retrying in 3s", port, e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    }
+                }
+            }
+        });
+    }
+
+    // 6. Spawn the Cloudflare quick tunnel (auto-reconnects, writes public URL to disk)
+    {
+        let port: u16 = std::env::var("HIVE_FILE_SERVER_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8420);
+        tokio::spawn(async move {
+            loop {
+                tracing::info!("[TUNNEL] Starting Cloudflare tunnel on port {}...", port);
+                let child = tokio::process::Command::new("cloudflared")
+                    .args([
+                        "tunnel",
+                        "--url", &format!("http://localhost:{}", port),
+                    ])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped()) // cloudflared outputs URL to stderr
+                    .kill_on_drop(true)
+                    .spawn();
+
+                match child {
+                    Ok(mut proc) => {
+                        if let Some(stderr) = proc.stderr.take() {
+                            use tokio::io::{AsyncBufReadExt, BufReader};
+                            let reader = BufReader::new(stderr);
+                            let mut lines = reader.lines();
+                            while let Ok(Some(line)) = lines.next_line().await {
+                                // Only log non-error lines at debug to avoid noise
+                                if line.contains("ERR") {
+                                    tracing::trace!("[TUNNEL] {}", line);
+                                } else {
+                                    tracing::debug!("[TUNNEL] {}", line);
+                                }
+                                // Capture the public URL (e.g. https://xxx.trycloudflare.com)
+                                if line.contains("trycloudflare.com") {
+                                    if let Some(url) = line.split_whitespace()
+                                        .find(|s| s.starts_with("https://") && s.contains("trycloudflare.com"))
+                                    {
+                                        let url = url.trim_end_matches(|c: char| c == '|' || c == ' ');
+                                        let _ = tokio::fs::create_dir_all("memory/core").await;
+                                        let _ = tokio::fs::write("memory/core/tunnel_url.txt", url).await;
+                                        tracing::info!("[TUNNEL] ✅ Public URL: {}", url);
+                                    }
+                                }
+                            }
+                        }
+                        let _ = proc.wait().await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("[TUNNEL] cloudflared not found or failed: {} — retrying in 30s", e);
+                    }
+                }
+                tracing::info!("[TUNNEL] Connection lost, reconnecting in 10s...");
+                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            }
+        });
+    }
 
     // Run the engine indefinitely
     tokio::select! {

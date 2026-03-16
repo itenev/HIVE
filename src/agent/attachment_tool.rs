@@ -9,6 +9,7 @@ pub async fn execute_read_attachment(
     if let Some(ref tx) = telemetry_tx {
         let _ = tx.send("📎 Fetching attachment (in-memory, no disk write)...\n".to_string()).await;
     }
+    tracing::debug!("[AGENT:attachment] ▶ task_id={}", task_id);
 
     let url = crate::agent::preferences::extract_tag(&desc, "url:")
         .unwrap_or_else(|| {

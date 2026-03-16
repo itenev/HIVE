@@ -13,6 +13,7 @@ pub async fn execute_operate_synaptic_graph(
     if let Some(ref tx) = telemetry_tx {
         let _ = tx.send("🕸️ Synaptic Drone executing...\n".to_string()).await;
     }
+    tracing::debug!("[AGENT:synaptic] ▶ task_id={}", task_id);
 
     let action = extract_tag(&description, "action:").unwrap_or_default().to_lowercase();
     let concept = extract_tag(&description, "concept:").unwrap_or_default();

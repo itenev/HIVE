@@ -32,11 +32,13 @@ pub mod autonomy_tool;
 pub mod reasoning_tool;
 pub mod attachment_tool;
 pub mod log_tool;
+pub mod download_tool;
 pub struct AgentManager {
     registry: HashMap<String, ToolTemplate>,
     discord_tools: HashMap<String, ToolTemplate>,
     provider: Arc<dyn Provider>,
     memory: Arc<MemoryStore>,
+    pub composer: Arc<crate::computer::document::DocumentComposer>,
     pub drives: Option<Arc<crate::engine::drives::DriveSystem>>,
     pub outreach_gate: Option<Arc<crate::engine::outreach::OutreachGate>>,
     pub inbox: Option<Arc<crate::engine::inbox::InboxManager>>,
@@ -123,7 +125,13 @@ impl AgentManager {
         };
         let generate_image = ToolTemplate {
             name: "generate_image".into(),
-            system_prompt: "The Flux Image Generator. Describe the image you want generated in highly detailed stable-diffusion style prompt format. Limit ONE image per request cycle. Description format: 'prompt:[detailed prompt]'".into(),
+            system_prompt: "The Flux Image Generator. Describe the image you want generated in highly detailed stable-diffusion style prompt format. Limit ONE image per request cycle. Description format: 'prompt:[detailed prompt]'. \
+            IMPORTANT: If the user asks to 'add an image', 'include an image', or 'use an image' WITHOUT explicitly saying 'generate', 'create', or 'make' a NEW image, you MUST use `list_cached_images` first and pick an existing cached image instead. Only call this tool when the user explicitly requests NEW image generation.".into(),
+            tools: vec![],
+        };
+        let list_cached_images = ToolTemplate {
+            name: "list_cached_images".into(),
+            system_prompt: "Reads all valid (<24h old) images currently stored in the visual cache. Use this to find available images you can embed into markdown or documents. Images are returned with their absolute file paths. You can embed them directly using standard Markdown: ![Description](/absolute/path/to/image.png).".into(),
             tools: vec![],
         };
         let voice_synthesizer = ToolTemplate {
@@ -134,14 +142,26 @@ impl AgentManager {
         let file_writer = ToolTemplate {
             name: "file_writer".into(),
             system_prompt: "You can create and EDIT richly formatted PDF documents. \
-            **Create:** 'action:[compose] id:[doc1] title:[...] theme:[professional/cyberpunk/minimal] content:[Markdown text...]' for single-shot. \
-            For multi-turn: 'action:[start] id:[doc1] title:[...] theme:[...]' then 'action:[add_section] id:[doc1] heading:[...] content:[...]' then 'action:[render] id:[doc1]'. \
+            CRITICAL: The `title:[...]` MUST match the user's requested title or topic EXACTLY — do NOT invent creative or alternative titles. If the user says 'make a PDF about bees', the title should be 'Bees' or match their exact phrasing. \
+            **Create:** 'action:[compose] id:[doc1] title:[...] theme:[THEME] content:[Markdown text...]' for single-shot. \
+            For multi-turn: 'action:[start] id:[doc1] title:[...] theme:[THEME]' then 'action:[add_section] id:[doc1] heading:[...] content:[...]' then 'action:[render] id:[doc1]'. \
             **Edit existing:** 'action:[inspect] id:[doc1]' to see sections by index. \
-            'action:[edit_section] id:[doc1] index:[N] heading:[New Heading] content:[New content...]' to modify a section. \
-            'action:[remove_section] id:[doc1] index:[N]' to delete a section. \
-            'action:[update_theme] id:[doc1] theme:[cyberpunk]' to change the visual theme. \
-            After any edit, call 'action:[render] id:[doc1]' to regenerate the PDF. \
-            'action:[list_drafts] id:[any]' shows all available drafts.".into(),
+            'action:[edit_section] id:[doc1] index:[N] heading:[New Heading] content:[New content...]' to modify a section (auto-renders + delivers PDF). \
+            'action:[remove_section] id:[doc1] index:[N]' to delete a section (auto-renders + delivers PDF). \
+            'action:[update_theme] id:[doc1] theme:[THEME]' to change the visual theme (auto-renders + delivers PDF). \
+            'action:[set_custom_css] id:[doc1] css:[:root { --bg-color: #1a1a2e; --text-color: #e0e0e0; --heading-color: #ff1493; --accent-color: #ff69b4; --border-color: #333; --code-bg: #2a2a3e; }]' to apply custom colors/fonts on top of any theme (auto-renders + delivers PDF). CRITICAL: You MUST use CSS variables (:root { --var: value; }) — NEVER raw element selectors like `body {}` or `h1 {}`, as those will conflict with the theme system and look broken. Available variables: --bg-color, --text-color, --heading-color, --accent-color, --border-color, --code-bg, --font-sans, --font-serif. You can also use the `css:[:root { ... }]` parameter inside `compose` actions directly. \\
+            'action:[list_drafts] id:[any]' shows all available drafts. \
+            **Available themes (THEME):** \
+            professional — White bg, black text, Inter font, blue accents (default). \
+            academic — Warm white bg, serif Merriweather font, justified text, double-border header. \
+            dark — Dark navy bg (#111827), light gray text, blue accents. \
+            cyberpunk — Black bg, NEON GREEN text (#00ff41), red headings, cyan accents, Share Tech Mono monospace font, ALL CAPS. \
+            pastel — Soft purple bg, deep purple text, pink headings. \
+            minimal — White bg, gray text, no borders, uppercase section headers. \
+            elegant — Off-white bg, Cormorant Garamond serif body, Montserrat sans headers, red accents. \
+            CRITICAL: Document edits (update_theme, edit_section, remove_section, set_custom_css) auto-render and auto-attach. Do NOT call render separately after these. \
+            **Image Embedding:** To embed an image in your PDF, you MUST physically include standard Markdown image syntax `![Description](/absolute/path/to/image.png)` *directly within your `content:[...]` parameter*. Use `list_cached_images` to find valid absolute paths. You cannot just describe the image in text; you MUST use the exact markdown syntax `![alt](/path)` inside your `content:[...]` string to embed it. CRITICAL: Place the image tag `![alt](/path)` IMMEDIATELY after the title/first heading — NEVER at the end of the content where it may be truncated by the model's generation window. \
+            **Output formats:** Add 'format:[pdf/txt/md/html/csv/json]' to render or compose actions (default: pdf). PDF uses headless Chrome with full styling. All other formats are lightweight and instant.".into(),
             tools: vec![],
         };
         let read_attachment = ToolTemplate {
@@ -177,6 +197,15 @@ impl AgentManager {
             system_prompt: "[ADMIN ONLY] You have direct write access to the filesystem. 'action:[write] path:[...] content:[...]' or 'action:[delete] path:[...]' or 'action:[append] path:[...] content:[...]'. Your operations are jailed to the project root unless specified.".into(),
             tools: vec![],
         };
+        let download = ToolTemplate {
+            name: "download".into(),
+            system_prompt: "[ADMIN ONLY] Download a file from the internet into the HIVE downloads directory and make it available on the file server. \
+                'action:[download] url:[https://example.com/file.pdf]' — download a file. If >25MB, it downloads asynchronously. \
+                'action:[status] file:[filename.ext]' — Check the progress of an async background download.\n\
+                Hard limits: 50GB max file size. \
+                Returns: local file path + file server URL + auto-attaches the file.".into(),
+            tools: vec![],
+        };
 
         registry.insert(researcher.name.clone(), researcher);
         registry.insert(codebase_list.name.clone(), codebase_list);
@@ -196,6 +225,7 @@ impl AgentManager {
         registry.insert(review_reasoning.name.clone(), review_reasoning);
         registry.insert(operate_turing_grid.name.clone(), operate_turing_grid);
         registry.insert(generate_image.name.clone(), generate_image);
+        registry.insert(list_cached_images.name.clone(), list_cached_images);
         registry.insert(voice_synthesizer.name.clone(), voice_synthesizer);
         registry.insert(file_writer.name.clone(), file_writer);
         registry.insert(read_attachment.name.clone(), read_attachment);
@@ -203,6 +233,7 @@ impl AgentManager {
         registry.insert(run_bash_command.name.clone(), run_bash_command);
         registry.insert(process_manager.name.clone(), process_manager);
         registry.insert(file_system_operator.name.clone(), file_system_operator);
+        registry.insert(download.name.clone(), download);
 
         // Discord-only tools
         discord_tools.insert(channel_reader.name.clone(), channel_reader);
@@ -213,6 +244,7 @@ impl AgentManager {
             discord_tools,
             provider,
             memory,
+            composer: Arc::new(crate::computer::document::DocumentComposer::new()),
             drives: None,
             outreach_gate: None,
             inbox: None,
@@ -289,6 +321,7 @@ impl AgentManager {
                 self.outreach_gate.clone(),
                 self.inbox.clone(),
                 self.drives.clone(),
+                Some(self.composer.clone()),
             ) {
                 futures.push(handle);
                 continue;

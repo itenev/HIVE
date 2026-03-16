@@ -16,6 +16,8 @@ impl ToolExecutor {
     }
 
     pub async fn execute(&self, task_id: &str, task_description: &str, context: &str, telemetry_tx: Option<tokio::sync::mpsc::Sender<String>>) -> ToolResult {
+        tracing::debug!("[AGENT:ToolExecutor] ▶ Executing template='{}' task_id='{}' desc_len={}",
+            self.template.name, task_id, task_description.len());
         let system_prompt = format!(
             "{}\n\n[CONTEXT PROVIDED BY QUEEN]\n{}\n\n[YOUR TASK]\n{}",
             self.template.system_prompt,
@@ -36,6 +38,8 @@ impl ToolExecutor {
 
         match result {
             Ok(output) => {
+                tracing::debug!("[AGENT:ToolExecutor] ◀ task_id='{}' template='{}' status=Success output_len={}",
+                    task_id, self.template.name, output.len());
                 // In the future we will count tokens, for now mock it to 0
                 ToolResult {
                     task_id: task_id.to_string(),
@@ -45,6 +49,8 @@ impl ToolExecutor {
                 }
             }
             Err(e) => {
+                tracing::error!("[AGENT:ToolExecutor] ❌ task_id='{}' template='{}' error={:?}",
+                    task_id, self.template.name, e);
                 ToolResult {
                     task_id: task_id.to_string(),
                     output: String::new(),

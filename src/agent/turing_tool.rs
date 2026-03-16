@@ -25,6 +25,7 @@ pub async fn execute_operate_turing_grid(
             ))
             .await;
     }
+    tracing::debug!("[AGENT:turing_grid] ▶ task_id={} action='{}'", task_id, action);
 
     let output;
 

@@ -16,11 +16,13 @@ pub fn dispatch_native_tool(
     outreach_gate: Option<Arc<crate::engine::outreach::OutreachGate>>,
     inbox: Option<Arc<crate::engine::inbox::InboxManager>>,
     drives: Option<Arc<crate::engine::drives::DriveSystem>>,
+    composer: Option<Arc<crate::computer::document::DocumentComposer>>,
 ) -> Option<tokio::task::JoinHandle<ToolResult>> {
     let task_id = task.task_id.clone();
     let desc = task.description.clone();
     let tx_clone = telemetry_tx.clone();
     let tool_type = task.tool_type.as_str();
+    tracing::debug!("[AGENT:Dispatch] ▶ Routing tool_type='{}' task_id='{}' desc_len={}", tool_type, task_id, desc.len());
 
     if tool_type == "channel_reader" {
         let handle = tokio::spawn(async move {
@@ -172,6 +174,10 @@ pub fn dispatch_native_tool(
         }
     } 
     
+    if tool_type == "list_cached_images" {
+        return Some(tokio::spawn(crate::agent::image_tool::execute_list_cached_images(task_id, desc, tx_clone)));
+    }
+    
     if tool_type == "voice_synthesizer" {
         let handle = tokio::spawn(async move {
             crate::agent::tts_tool::execute_voice_synthesizer(task_id, desc, tx_clone).await
@@ -188,8 +194,9 @@ pub fn dispatch_native_tool(
     } 
     
     if tool_type == "file_writer" {
+        let composer_clone = composer.map(|c| c.as_ref().clone());
         let handle = tokio::spawn(async move {
-            crate::agent::file_writer::execute_file_writer(task_id, desc, None, tx_clone).await
+            crate::agent::file_writer::execute_file_writer(task_id, desc, composer_clone, tx_clone).await
         });
         return Some(handle);
     } 
@@ -277,6 +284,13 @@ pub fn dispatch_native_tool(
     if tool_type == "autonomy_activity" {
         let handle = tokio::spawn(async move {
             crate::agent::autonomy_tool::execute_autonomy_activity(task_id, desc, tx_clone).await
+        });
+        return Some(handle);
+    }
+
+    if tool_type == "download" {
+        let handle = tokio::spawn(async move {
+            crate::agent::download_tool::execute_download(task_id, desc, tx_clone).await
         });
         return Some(handle);
     }
@@ -375,6 +389,7 @@ pub fn dispatch_native_tool(
         return Some(handle);
     }
 
+    tracing::warn!("[AGENT:Dispatch] Unknown tool_type='{}' task_id='{}' — no handler found", tool_type, task_id);
     None
 }
 
@@ -401,7 +416,7 @@ mod tests {
             "review_reasoning", "read_attachment", "manage_user_preferences",
             "manage_skill", "manage_routine", "manage_lessons", "search_timeline",
             "manage_scratchpad", "operate_synaptic_graph", "read_core_memory",
-            "synthesizer"
+            "synthesizer", "download", "list_cached_images"
         ];
         
         for t in tools {
@@ -420,6 +435,7 @@ mod tests {
                 None,
                 mem.clone(),
                 provider.clone(),
+                None,
                 None,
                 None,
                 None,
@@ -446,6 +462,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(dup_handle.is_some());
         
@@ -464,6 +481,7 @@ mod tests {
             None,
             mem.clone(),
             provider.clone(),
+            None,
             None,
             None,
             None,

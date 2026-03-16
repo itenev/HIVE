@@ -8,6 +8,7 @@ pub async fn synthesize_50_turn(
     memory: Arc<MemoryStore>,
     scope: Scope,
 ) -> Result<(), String> {
+    tracing::info!("[SYNTHESIS] ▶ 50-turn synthesis for scope='{}'", scope.to_key());
     let timeline_data = memory.timeline.read_timeline(&scope).await.unwrap_or_default();
     let history_str = String::from_utf8_lossy(&timeline_data);
     let recent_lines: Vec<&str> = history_str.lines().rev().take(100).collect();
@@ -38,6 +39,7 @@ pub async fn synthesize_50_turn(
     });
 
     memory.timelines.write(&scope, &timelines).await.map_err(|e| e.to_string())?;
+    tracing::info!("[SYNTHESIS] ✅ 50-turn synthesis complete for scope='{}'", scope.to_key());
     Ok(())
 }
 
@@ -46,6 +48,7 @@ pub async fn synthesize_24_hr(
     memory: Arc<MemoryStore>,
     scope: Scope,
 ) -> Result<(), String> {
+    tracing::info!("[SYNTHESIS] ▶ 24-hour synthesis for scope='{}'", scope.to_key());
     let timeline_data = memory.timeline.read_timeline(&scope).await.unwrap_or_default();
     let history_str = String::from_utf8_lossy(&timeline_data);
     let recent_lines: Vec<&str> = history_str.lines().rev().take(800).collect();
@@ -76,6 +79,7 @@ pub async fn synthesize_24_hr(
     });
 
     memory.timelines.write(&scope, &timelines).await.map_err(|e| e.to_string())?;
+    tracing::info!("[SYNTHESIS] ✅ 24-hour synthesis complete for scope='{}'", scope.to_key());
     Ok(())
 }
 
@@ -84,6 +88,7 @@ pub async fn synthesize_lifetime(
     memory: Arc<MemoryStore>,
     scope: Scope,
 ) -> Result<(), String> {
+    tracing::info!("[SYNTHESIS] ▶ Lifetime synthesis for scope='{}'", scope.to_key());
     let timelines = memory.timelines.read(&scope).await;
     
     let previous_lifetime = timelines.lifetime.as_ref().map(|l| l.narrative.as_str()).unwrap_or("No previous lifetime summary exists. This is the origin.");
@@ -115,6 +120,7 @@ pub async fn synthesize_lifetime(
     });
 
     memory.timelines.write(&scope, &timelines_mem).await.map_err(|e| e.to_string())?;
+    tracing::info!("[SYNTHESIS] ✅ Lifetime synthesis complete for scope='{}'", scope.to_key());
     Ok(())
 }
 

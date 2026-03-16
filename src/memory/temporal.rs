@@ -57,6 +57,7 @@ impl TemporalTracker {
 
         if self.state.birthdate.is_none() {
             self.state.birthdate = Some(now_iso.clone());
+            tracing::info!("[MEMORY:Temporal] First boot ever — birthdate set to {}", now_iso);
         }
 
         if let Some(last_shutdown) = &self.state.last_shutdown
@@ -64,10 +65,12 @@ impl TemporalTracker {
                 let shutdown_dt = shutdown_dt.with_timezone(&Utc);
                 let gap = (self.uptime_start - shutdown_dt).num_seconds();
                 self.state.last_downtime_seconds = gap.max(0) as f64;
+                tracing::debug!("[MEMORY:Temporal] Downtime since last shutdown: {:.0}s", self.state.last_downtime_seconds);
             }
 
         self.state.last_boot = Some(now_iso);
         self.state.total_boots += 1;
+        tracing::info!("[MEMORY:Temporal] Boot #{} registered", self.state.total_boots);
         self.save_state();
     }
 
@@ -77,6 +80,7 @@ impl TemporalTracker {
         
         let session_seconds = (now - self.uptime_start).num_seconds() as f64;
         self.state.total_uptime_seconds += session_seconds;
+        tracing::info!("[MEMORY:Temporal] Shutdown recorded (session={:.0}s, total_uptime={:.0}s)", session_seconds, self.state.total_uptime_seconds);
         
         self.save_state();
     }

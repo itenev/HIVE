@@ -861,3 +861,71 @@ string ending with an unescaped quote \" and an emoji 😊.",
         // It should have toggled to true
         assert!(train_flag.load(Ordering::SeqCst));
     }
+
+    #[test]
+    fn test_humanize_telemetry_no_json() {
+        use crate::engine::core::humanize_telemetry;
+        let result = humanize_telemetry("Just some reasoning text, no JSON here.");
+        assert_eq!(result, "Just some reasoning text, no JSON here.");
+    }
+
+    #[test]
+    fn test_humanize_telemetry_valid_json_with_tasks() {
+        use crate::engine::core::humanize_telemetry;
+        let input = r#"Thinking about this. {"thought": "plan", "tasks": [{"tool_type": "researcher", "description": "Find info"}, {"tool_type": "file_writer", "description": "Write PDF"}]}"#;
+        let result = humanize_telemetry(input);
+        assert!(result.contains("Thinking about this."));
+        assert!(result.contains("🔧 researcher: Find info"));
+        assert!(result.contains("🔧 file_writer: Write PDF"));
+        assert!(!result.contains("\"thought\""));
+    }
+
+    #[test]
+    fn test_humanize_telemetry_incomplete_json() {
+        use crate::engine::core::humanize_telemetry;
+        // Simulates mid-stream: braces not balanced yet
+        let input = r#"Reasoning here. {"thought": "still writing", "tasks": [{"tool_type": "res"#;
+        let result = humanize_telemetry(input);
+        assert!(result.contains("Reasoning here."));
+        assert!(result.contains("⏳ Planning..."));
+        assert!(!result.contains("\"thought\""));
+    }
+
+    #[test]
+    fn test_humanize_telemetry_tool_updates_after_json() {
+        use crate::engine::core::humanize_telemetry;
+        let input = r#"Thinking. {"thought": "x", "tasks": [{"tool_type": "web_search", "description": "Search"}]}📑 Starting Document Draft...
+⚙️ Rendering PDF..."#;
+        let result = humanize_telemetry(input);
+        assert!(result.contains("Thinking."));
+        assert!(result.contains("🔧 web_search: Search"));
+        assert!(result.contains("📑 Starting Document Draft..."));
+        assert!(result.contains("⚙️ Rendering PDF..."));
+    }
+
+    #[test]
+    fn test_humanize_telemetry_braces_in_strings() {
+        use crate::engine::core::humanize_telemetry;
+        // JSON with braces inside string values — should still match correctly
+        let input = r#"{"thought": "The user wrote {hello}", "tasks": [{"tool_type": "reply", "description": "Respond with {braces}"}]}"#;
+        let result = humanize_telemetry(input);
+        assert!(result.contains("🔧 reply: Respond with {braces}"));
+        assert!(!result.contains("\"thought\""));
+    }
+
+    #[test]
+    fn test_humanize_telemetry_no_tasks_key() {
+        use crate::engine::core::humanize_telemetry;
+        // Valid JSON but no "tasks" — should hide the JSON silently
+        let input = r#"Reasoning. {"thought": "just thinking, no plan yet"}"#;
+        let result = humanize_telemetry(input);
+        assert!(result.contains("Reasoning."));
+        assert!(!result.contains("\"thought\""));
+    }
+
+    #[test]
+    fn test_humanize_telemetry_empty() {
+        use crate::engine::core::humanize_telemetry;
+        let result = humanize_telemetry("");
+        assert_eq!(result, ""); // No JSON found → pass through as-is
+    }

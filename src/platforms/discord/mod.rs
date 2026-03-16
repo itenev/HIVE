@@ -154,9 +154,16 @@ impl Platform for DiscordPlatform {
         if response.is_telemetry {
             if thinking_msg_id > 0 {
                 let map = self.active_telemetry.lock().await;
+                let map_size = map.len();
                 if let Some(tx) = map.get(&thinking_msg_id) {
+                    let text_preview: String = response.text.chars().take(80).collect();
+                    tracing::debug!("[TELEMETRY:DISCORD] 📨 Updating embed msg_id={} (map_size={}, text='{}')", thinking_msg_id, map_size, text_preview);
                     let _ = tx.send(Some(response.text.clone()));
+                } else {
+                    tracing::warn!("[TELEMETRY:DISCORD] ⚠️ msg_id={} NOT FOUND in active_telemetry map (map_size={}, keys={:?})", thinking_msg_id, map_size, map.keys().collect::<Vec<_>>());
                 }
+            } else if response.platform != "discord:1480192647657427044" {
+                tracing::warn!("[TELEMETRY:DISCORD] ⚠️ thinking_msg_id=0 — cannot route telemetry (platform='{}')", response.platform);
             }
         } else {
             // Discord limits messages to 2000 characters. We must chunk the final response.

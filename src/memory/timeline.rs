@@ -56,6 +56,8 @@ impl TimelineManager {
     }
 
     pub async fn append_event(&self, event: &Event) {
+        tracing::trace!("[MEMORY:Timeline] append_event: scope='{}' author='{}' content_len={}",
+            event.scope.to_key(), event.author_name, event.content.len());
         // 1. Update in-memory state
         let mut w = self.events.write().await;
         w.push(event.clone());
@@ -77,9 +79,12 @@ impl TimelineManager {
     pub async fn read_timeline(&self, scope: &Scope) -> std::io::Result<Vec<u8>> {
         let path = self.get_timeline_path(scope);
         if !path.exists() {
+            tracing::trace!("[MEMORY:Timeline] read_timeline: no file for scope='{}'", scope.to_key());
             return Ok(Vec::new());
         }
-        tokio::fs::read(path).await
+        let data = tokio::fs::read(path).await?;
+        tracing::debug!("[MEMORY:Timeline] read_timeline: scope='{}' bytes={}", scope.to_key(), data.len());
+        Ok(data)
     }
 
     pub async fn get_formatted_hud(&self) -> String {

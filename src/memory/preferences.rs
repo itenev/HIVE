@@ -80,12 +80,15 @@ impl PreferenceStore {
         let path = self.get_preferences_path(scope);
         if let Ok(data) = fs::read_to_string(&path).await
             && let Ok(prefs) = serde_json::from_str(&data) {
+                tracing::trace!("[MEMORY:Prefs] read: scope='{}' loaded from disk", scope.to_key());
                 return prefs;
             }
+        tracing::trace!("[MEMORY:Prefs] read: scope='{}' returning defaults", scope.to_key());
         PreferencesData::default()
     }
 
     pub async fn write(&self, scope: &Scope, prefs: &PreferencesData) -> std::io::Result<()> {
+        tracing::debug!("[MEMORY:Prefs] write: scope='{}' name={:?}", scope.to_key(), prefs.name);
         let path = self.get_preferences_path(scope);
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent).await;

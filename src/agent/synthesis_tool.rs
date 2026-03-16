@@ -17,6 +17,7 @@ pub async fn execute_synthesizer(
             .send(format!("🔀 Synthesizer Drone: '{}'\n", description.trim()))
             .await;
     }
+    tracing::debug!("[AGENT:synthesizer] ▶ task_id={}", task_id);
 
     let system_prompt = format!(
         "You are the Synthesizer Drone. Your job is to read the drone outputs provided \

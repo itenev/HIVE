@@ -16,6 +16,7 @@ pub async fn execute_search_timeline(
     if let Some(ref tx) = telemetry_tx {
         let _ = tx.send("🧠 Timeline Drone executing...\n".to_string()).await;
     }
+    tracing::debug!("[AGENT:timeline] ▶ task_id={}", task_id);
 
     let query = extract_tag(&description, "query:").unwrap_or_default().to_lowercase();
     let limit_str = extract_tag(&description, "limit:").unwrap_or("20".to_string());

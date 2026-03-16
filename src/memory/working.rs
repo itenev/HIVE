@@ -70,6 +70,8 @@ impl WorkingMemory {
         let estimated_tokens = event.content.len() / 4;
         let mut tc = self.token_count.write().await;
         *tc += estimated_tokens;
+        tracing::debug!("[MEMORY:Working] add_event: scope='{}' author='{}' content_len={} est_tokens={} total_tokens={}",
+            event.scope.to_key(), event.author_name, event.content.len(), estimated_tokens, *tc);
         
         // 3. Persist to disk
         let path = self.get_transcript_path(&event.scope);
@@ -104,9 +106,11 @@ impl WorkingMemory {
         // Data is not permanently lost; `memory::autosave` and `memory::timeline` retain full persistence.
         if history.len() > 40 {
             let start = history.len() - 40;
+            tracing::debug!("[MEMORY:Working] get_history: capping {} events to 40 (scope='{}')", history.len(), requesting_scope.to_key());
             history = history[start..].to_vec();
         }
 
+        tracing::trace!("[MEMORY:Working] get_history: scope='{}' returning {} events", requesting_scope.to_key(), history.len());
         history
     }
     
@@ -176,12 +180,13 @@ impl WorkingMemory {
             let mut tc = self.token_count.write().await;
             *tc = total_tokens;
             
-            println!("Loaded {} persistent memory events (approx {} tokens) across sessions.", w.len(), *tc);
+            tracing::info!("[MEMORY:Working] Loaded {} persistent memory events (approx {} tokens) across sessions.", w.len(), *tc);
         }
     }
     
     /// Clears the working memory transcript (called internally by Autosave)
     pub async fn clear(&self, scope: &Scope) {
+        tracing::debug!("[MEMORY:Working] Clearing working memory for scope='{}'", scope.to_key());
         let mut w = self.events.write().await;
         w.retain(|e| e.scope != *scope); // Remove events for this scope
         
@@ -195,6 +200,7 @@ impl WorkingMemory {
 
     /// Completely wipes all RAM structures.
     pub async fn clear_all(&self) {
+        tracing::debug!("[MEMORY:Working] Clearing ALL working memory");
         let mut w = self.events.write().await;
         w.clear();
         let mut tc = self.token_count.write().await;

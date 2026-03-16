@@ -58,12 +58,16 @@ impl TimelineStore {
         let path = self.get_path(scope);
         if let Ok(data) = tokio::fs::read_to_string(&path).await
             && let Ok(td) = serde_json::from_str(&data) {
+                tracing::trace!("[MEMORY:Timelines] read: scope='{}' loaded", scope.to_key());
                 return td;
             }
+        tracing::trace!("[MEMORY:Timelines] read: scope='{}' returning defaults", scope.to_key());
         TimelineData::default()
     }
 
     pub async fn write(&self, scope: &Scope, data: &TimelineData) -> Result<(), String> {
+        tracing::debug!("[MEMORY:Timelines] write: scope='{}' has_50turn={} has_daily={} has_lifetime={}",
+            scope.to_key(), data.last_50_turns.is_some(), data.last_24_hours.is_some(), data.lifetime.is_some());
         let path = self.get_path(scope);
         let s = serde_json::to_string_pretty(data).map_err(|e| e.to_string())?;
         tokio::fs::write(&path, s).await.map_err(|e| e.to_string())?;

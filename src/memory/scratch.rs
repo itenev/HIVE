@@ -43,11 +43,14 @@ impl Scratchpad {
     /// Reads the entire contents of the scratchpad. Returns an empty string if it doesn't exist.
     pub async fn read(&self, scope: &Scope) -> String {
         let path = self.get_scratchpad_path(scope);
-        fs::read_to_string(&path).await.unwrap_or_default()
+        let content = fs::read_to_string(&path).await.unwrap_or_default();
+        tracing::trace!("[MEMORY:Scratch] read: scope='{}' len={}", scope.to_key(), content.len());
+        content
     }
 
     /// Overwrites the scratchpad with new content.
     pub async fn write(&self, scope: &Scope, content: &str) -> std::io::Result<()> {
+        tracing::debug!("[MEMORY:Scratch] write: scope='{}' content_len={}", scope.to_key(), content.len());
         let path = self.get_scratchpad_path(scope);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
@@ -57,6 +60,7 @@ impl Scratchpad {
 
     /// Appends text to the end of the scratchpad.
     pub async fn append(&self, scope: &Scope, content: &str) -> std::io::Result<()> {
+        tracing::debug!("[MEMORY:Scratch] append: scope='{}' content_len={}", scope.to_key(), content.len());
         let path = self.get_scratchpad_path(scope);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
@@ -72,6 +76,7 @@ impl Scratchpad {
     
     /// Clears the scratchpad completely.
     pub async fn clear(&self, scope: &Scope) -> std::io::Result<()> {
+        tracing::debug!("[MEMORY:Scratch] clear: scope='{}'", scope.to_key());
         let path = self.get_scratchpad_path(scope);
         if path.exists() {
             fs::remove_file(&path).await

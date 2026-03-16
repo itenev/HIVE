@@ -25,6 +25,7 @@ pub async fn execute_outreach(
     if let Some(ref tx) = telemetry_tx {
         let _ = tx.send("📨 Outreach Agent Tool executing...\n".to_string()).await;
     }
+    tracing::debug!("[AGENT:outreach] ▶ task_id={}", task_id);
 
     let gate = match outreach_gate {
         Some(g) => g,

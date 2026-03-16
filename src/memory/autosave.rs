@@ -36,6 +36,7 @@ impl AutosaveManager {
         _scope: &Scope, 
         _transcript_path: PathBuf
     ) -> std::io::Result<(String, String)> {
+        tracing::info!("[MEMORY:Autosave] Archiving transcript (path='{}')", _transcript_path.display());
         // Placeholder for the actual LLM call and file moving sequence.
         // In the next step, we will hook this up to the Prompt Engine.
         

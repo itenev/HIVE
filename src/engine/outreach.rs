@@ -161,9 +161,11 @@ impl OutreachGate {
     /// Check timing + consent for outreach to a user.
     /// Returns (allowed, reason).
     pub async fn can_outreach(&self, user_id: &str) -> (bool, String) {
+        tracing::debug!("[ENGINE:Outreach] ▶ can_outreach for user_id={}", user_id);
         let s = self.load(user_id);
 
         if s.delivery == OutreachDelivery::None {
+            tracing::debug!("[ENGINE:Outreach] ◀ Outreach blocked for user_id={} (delivery=none)", user_id);
             return (false, "Outreach disabled for this user.".into());
         }
         if s.frequency == OutreachFrequency::Unlimited {
@@ -229,12 +231,15 @@ impl OutreachGate {
             Ok(response) => {
                 let upper = response.trim().to_uppercase();
                 if upper.contains("YES") {
+                    tracing::debug!("[ENGINE:Outreach] AI approved outreach for user_id={} ({:.1}h since last)", user_id, hours_since);
                     (true, format!("AI approved: appropriate timing ({:.1}h since last)", hours_since))
                 } else {
+                    tracing::debug!("[ENGINE:Outreach] AI denied outreach for user_id={} ({:.1}h since last)", user_id, hours_since);
                     (false, format!("AI: not appropriate time ({:.1}h since last)", hours_since))
                 }
             }
             Err(_) => {
+                tracing::warn!("[ENGINE:Outreach] AI timing gate failed for user_id={}, using fallback threshold", user_id);
                 // Fallback: hard threshold
                 let min = frequency.min_hours();
                 if hours_since >= min {
@@ -248,6 +253,7 @@ impl OutreachGate {
 
     /// Record that outreach was successfully sent.
     pub fn record_outreach(&self, user_id: &str) {
+        tracing::debug!("[ENGINE:Outreach] Recording outreach sent for user_id={}", user_id);
         let mut s = self.load(user_id);
         s.last_outreach = Some(Utc::now());
         self.save(user_id, &s);
@@ -255,6 +261,7 @@ impl OutreachGate {
 
     /// Update cached relationship data (called on each incoming user message).
     pub fn record_interaction(&self, user_id: &str, relationship_strength: u8) {
+        tracing::debug!("[ENGINE:Outreach] Recording interaction for user_id={} (strength={})", user_id, relationship_strength);
         let mut s = self.load(user_id);
         s.interaction_count += 1;
         s.relationship_strength = relationship_strength;
@@ -262,6 +269,7 @@ impl OutreachGate {
     }
 
     pub fn set_frequency(&self, user_id: &str, freq: OutreachFrequency) -> String {
+        tracing::debug!("[ENGINE:Outreach] Setting frequency for user_id={} to '{}'", user_id, freq.as_str());
         let mut s = self.load(user_id);
         let label = freq.as_str().to_string();
         let hours = freq.min_hours();
@@ -272,6 +280,7 @@ impl OutreachGate {
     }
 
     pub fn set_delivery(&self, user_id: &str, delivery: OutreachDelivery) -> String {
+        tracing::debug!("[ENGINE:Outreach] Setting delivery for user_id={} to '{}'", user_id, delivery);
         let mut s = self.load(user_id);
         let label = delivery.to_string();
         s.delivery = delivery;

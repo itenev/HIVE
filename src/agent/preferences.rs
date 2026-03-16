@@ -26,6 +26,7 @@ pub async fn execute_manage_user_preferences(
     }
 
     let action = extract_tag(&description, "action:").unwrap_or_default();
+    tracing::debug!("[AGENT:preferences] ▶ task_id={} action='{}' scope='{}'", task_id, action, scope.to_key());
     
     if action.is_empty() {
         return DroneResult {
@@ -99,8 +100,8 @@ pub async fn execute_manage_user_preferences(
     }
 
     DroneResult {
-        task_id,
-        output: success_msg,
+        task_id: task_id.clone(),
+        output: success_msg.clone(),
         tokens_used: 0,
         status: DroneStatus::Success,
     }

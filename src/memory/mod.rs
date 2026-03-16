@@ -92,16 +92,19 @@ impl MemoryStore {
     }
 
     pub async fn init(&self) {
+        tracing::info!("[MEMORY] ▶ Initializing MemoryStore...");
         self.working.load_persisted().await;
         // Init grid logic:
         let grid_path = self.turing_grid.lock().await.persistence_path.clone();
         if let Ok(loaded) = TuringGrid::load(grid_path).await {
             *self.turing_grid.lock().await = loaded;
+            tracing::debug!("[MEMORY] Turing Grid loaded from persisted state");
         } else {
-            tracing::debug!("[Memory] 🔲 Turing Grid starting fresh (no persisted state)");
+            tracing::debug!("[MEMORY] 🔲 Turing Grid starting fresh (no persisted state)");
         }
         let _ = self.alu.init().await;
         self.temporal.write().await.init_and_register_boot().await;
+        tracing::info!("[MEMORY] ✅ MemoryStore initialization complete");
     }
 
     /// Stores a new event into the primary working memory and appends to the timeline.

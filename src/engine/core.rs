@@ -63,10 +63,105 @@ pub fn format_elapsed(elapsed_secs: u64) -> String {
 
 use crate::agent::AgentManager;
 
-/// Creates a telemetry channel and spawns the debounced receiver task.
-/// Returns the `mpsc::Sender<String>` for passing to `execute_react_loop`.
-/// Must be called INSIDE the spawned task (not on the main event loop),
-/// so the sender lifecycle matches the task lifecycle.
+/// Cleans up telemetry text for Discord embeds.
+/// If the text contains a JSON task plan, extracts tool_type + description
+/// into human-readable lines. Reasoning text and tool updates pass through unchanged.
+/// Robust: if anything looks malformed, the original text passes through rather than being hidden.
+pub(crate) fn humanize_telemetry(text: &str) -> String {
+    // Find the start of the JSON block
+    let brace_pos = match text.find('{') {
+        Some(pos) => pos,
+        None => return text.to_string(), // No JSON, return as-is
+    };
+    
+    let reasoning = &text[..brace_pos];
+    let from_brace = &text[brace_pos..];
+    
+    // Find the matching closing brace using depth counting,
+    // skipping braces inside JSON string literals for robustness
+    let mut depth = 0;
+    let mut json_end: Option<usize> = None;
+    let mut in_string = false;
+    let mut prev_was_escape = false;
+    for (i, ch) in from_brace.char_indices() {
+        if in_string {
+            if ch == '\\' && !prev_was_escape {
+                prev_was_escape = true;
+                continue;
+            }
+            if ch == '"' && !prev_was_escape {
+                in_string = false;
+            }
+            prev_was_escape = false;
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    json_end = Some(i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    // If braces never balanced, this is incomplete JSON (still streaming)
+    // Show reasoning + planning indicator, don't show raw JSON
+    let json_end = match json_end {
+        Some(end) => end,
+        None => {
+            let trimmed = reasoning.trim();
+            return if trimmed.is_empty() {
+                "⏳ Planning...".to_string()
+            } else {
+                format!("{}\n\n⏳ Planning...", trimmed)
+            };
+        }
+    };
+    
+    let json_block = &from_brace[..json_end];
+    let after_json = from_brace[json_end..].trim_start();
+    
+    // Try to parse the JSON block and extract task descriptions
+    let filtered_json = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_block) {
+        if let Some(tasks) = parsed.get("tasks").and_then(|t| t.as_array()) {
+            let lines: Vec<String> = tasks.iter().map(|task| {
+                let tool = task.get("tool_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let desc = task.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let truncated = if desc.len() > 80 { format!("{}…", &desc[..80]) } else { desc.to_string() };
+                format!("🔧 {}: {}", tool, truncated)
+            }).collect();
+            if lines.is_empty() { String::new() } else { lines.join("\n") }
+        } else {
+            String::new() // Valid JSON but no "tasks" key — just hide it
+        }
+    } else {
+        String::new() // Matched braces but invalid JSON — just hide it
+    };
+    
+    // Reassemble: reasoning + filtered JSON summary + tool updates (everything after JSON)
+    let mut parts: Vec<&str> = Vec::new();
+    let trimmed_reasoning = reasoning.trim();
+    if !trimmed_reasoning.is_empty() {
+        parts.push(trimmed_reasoning);
+    }
+    if !filtered_json.is_empty() {
+        parts.push(&filtered_json);
+    }
+    if !after_json.is_empty() {
+        parts.push(after_json);
+    }
+    if parts.is_empty() {
+        "⏳ Processing...".to_string()
+    } else {
+        parts.join("\n\n")
+    }
+}
+
 fn spawn_telemetry_receiver(
     platforms: Arc<HashMap<String, Box<dyn Platform>>>,
     platform_id: String,
@@ -74,8 +169,10 @@ fn spawn_telemetry_receiver(
 ) -> mpsc::Sender<String> {
     let (tx, mut rx) = mpsc::channel::<String>(50);
 
+    let platform_id_log = platform_id.clone();
     tokio::spawn(async move {
         let start_time = tokio::time::Instant::now();
+        tracing::debug!("[TELEMETRY:RX] 🎧 Receiver spawned for platform='{}'", platform_id_log);
         let debounce_ms = 800;
         let mut has_update = false;
         let mut buffered_thought = String::new();
@@ -97,35 +194,61 @@ fn spawn_telemetry_receiver(
             "🌼 *Performing the waggle dance to broadcast data coordinates...*"
         ];
 
+        let mut last_send = tokio::time::Instant::now();
         loop {
             let recv_result = tokio::time::timeout(
-                tokio::time::Duration::from_millis(debounce_ms),
+                tokio::time::Duration::from_millis(100), // Check frequently
                 rx.recv()
             ).await;
 
             match recv_result {
                 Ok(Some(chunk)) => {
+                    if !has_update {
+                        tracing::debug!("[TELEMETRY:RX] 📥 First chunk received for platform='{}' ({}ms elapsed)", platform_id, start_time.elapsed().as_millis());
+                    }
                     buffered_thought.push_str(&chunk);
                     has_update = true;
                 }
-                Ok(None) => { break; }
-                Err(_) => {
-                    if has_update {
-                        let elapsed_str = format_elapsed(start_time.elapsed().as_secs());
-                        let current_quirk = quirks[start_time.elapsed().as_millis() as usize % quirks.len()];
-                        let status = format!("{} ({})\n\n{}", current_quirk, elapsed_str, buffered_thought);
-                        let update_res = Response {
-                            platform: platform_id.clone(),
-                            target_scope: scope.clone(),
-                            text: status,
-                            is_telemetry: true,
-                        };
-                        if let Some(platform) = platforms.get(update_res.platform.split(':').next().unwrap_or("")) {
-                            let _ = platform.send(update_res).await;
-                        }
-                        has_update = false;
-                    }
+                Ok(None) => {
+                    tracing::debug!("[TELEMETRY:RX] 🔌 Channel closed for platform='{}'", platform_id);
+                    break;
                 }
+                Err(_) => { // timeout
+                    // Just fall through to check elapsed time
+                }
+            }
+            
+            // Dispatch update if we have new data and the debounce period has passed
+            if has_update && last_send.elapsed().as_millis() >= debounce_ms {
+                let elapsed_str = format_elapsed(start_time.elapsed().as_secs());
+                let current_quirk = quirks[start_time.elapsed().as_millis() as usize % quirks.len()];
+                let thought_len = buffered_thought.len();
+                let humanized = humanize_telemetry(&buffered_thought);
+                // Discord embed description limit is 4096 chars; keep under with room for the quirk prefix
+                let max_len = 3800;
+                let display_text = if humanized.len() > max_len {
+                    format!("…{}", &humanized[humanized.len() - max_len..])
+                } else {
+                    humanized
+                };
+                let status = format!("{} ({})\n\n{}", current_quirk, elapsed_str, display_text);
+                let update_res = Response {
+                    platform: platform_id.clone(),
+                    target_scope: scope.clone(),
+                    text: status,
+                    is_telemetry: true,
+                };
+                let platform_key = update_res.platform.split(':').next().unwrap_or("");
+                if let Some(platform) = platforms.get(platform_key) {
+                    tracing::debug!("[TELEMETRY:RX] 📤 Sending telemetry update to '{}' (thought_len={}, elapsed={})", platform_id, thought_len, elapsed_str);
+                    if let Err(e) = platform.send(update_res).await {
+                        tracing::warn!("[TELEMETRY:RX] ❌ platform.send failed: {}", e);
+                    }
+                } else {
+                    tracing::warn!("[TELEMETRY:RX] ❌ Platform '{}' not found in platforms map!", platform_key);
+                }
+                has_update = false;
+                last_send = tokio::time::Instant::now();
             }
         }
 
@@ -134,7 +257,14 @@ fn spawn_telemetry_receiver(
         let status = if buffered_thought.is_empty() {
             format!("✅ Complete ({})", elapsed_str)
         } else {
-            format!("✅ Complete ({})\n\n{}", elapsed_str, buffered_thought)
+            let humanized = humanize_telemetry(&buffered_thought);
+            let max_len = 3800;
+            let display_text = if humanized.len() > max_len {
+                format!("…{}", &humanized[humanized.len() - max_len..])
+            } else {
+                humanized
+            };
+            format!("✅ Complete ({})\n\n{}", elapsed_str, display_text)
         };
         let update_res = Response {
             platform: platform_id.clone(),
@@ -232,15 +362,17 @@ impl Engine {
         tracing::info!("HIVE is active. Apis is listening.");
 
         // Autonomy loop: self-event timer after 5 min idle
-        let mut autonomy_handle: Option<tokio::task::JoinHandle<()>> = None;
+        let autonomy_handle: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> = Arc::new(tokio::sync::Mutex::new(None));
         // PREEMPTION: Track active autonomy ReAct loop so it can be aborted on user messages
         let mut active_autonomy_task: Option<tokio::task::JoinHandle<()>> = None;
 
         // Main Event Loop
         while let Some(event) = self.event_receiver.recv().await {
+            tracing::debug!("[ENGINE] ▶ Event received: platform='{}' author='{}' scope='{}' content_len={}",
+                event.platform, event.author_name, event.scope.to_key(), event.content.len());
 
             // Cancel any pending autonomy timer when a real event arrives
-            if let Some(handle) = autonomy_handle.take() {
+            if let Some(handle) = autonomy_handle.lock().await.take() {
                 handle.abort();
             }
 
@@ -324,6 +456,7 @@ impl Engine {
 
             // 1. Retrieve working history for this specific scope
             let mut history = self.memory.get_working_history(&event.scope).await;
+            tracing::debug!("[ENGINE] History retrieved for scope='{}': {} messages", event.scope.to_key(), history.len());
             
             let db_turn = history.len() / 2;
             let bg_synth_needed = db_turn > 0 && db_turn % 50 == 0;
@@ -349,6 +482,8 @@ impl Engine {
             }
 
             if bg_synth_needed || bg_daily_needed {
+                tracing::debug!("[ENGINE] 🔄 Spawning background synthesis (50-turn={}, daily={}, lifetime={})",
+                    bg_synth_needed, bg_daily_needed, bg_lifetime_needed);
                 let prov_clone = self.provider.clone();
                 let mem_clone = self.memory.clone();
                 let scope_clone = event.scope.clone();
@@ -370,6 +505,7 @@ impl Engine {
 
             // 3. Check for Context Limit & Trigger Autosave
             if let Some(continuity_summary) = self.memory.check_and_trigger_autosave(&event.scope).await {
+                tracing::info!("[ENGINE] 💾 Autosave triggered for scope='{}' — history reset to continuity summary", event.scope.to_key());
                 // If an autosave happened, the history we retrieved in step 1 is stale and huge.
                 // We must reset our history to JUST the continuity summary and the new event.
                 history = vec![continuity_summary, event.clone()];
@@ -388,6 +524,7 @@ impl Engine {
                 let capabilities_bg = self.capabilities.clone();
                 let teacher_bg = self.teacher.clone();
                 let autonomy_sender_bg = autonomy_sender.clone();
+                let autonomy_handle_bg = autonomy_handle.clone();
                 let semaphore_bg = self.concurrency_semaphore.clone();
 
                 active_autonomy_task = Some(tokio::spawn(async move {
@@ -466,13 +603,14 @@ impl Engine {
                     if let Some(ref sender) = autonomy_sender_bg {
                         let sender_clone = sender.clone();
                         let memory_clone = memory_bg.clone();
-                        tokio::spawn(async move {
+                        let autonomy_handle_bg_inner = autonomy_handle_bg.clone();
+                        let handle = tokio::spawn(async move {
                             tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
                             tracing::info!("[AUTONOMY] 🐝 5-minute idle timer fired. Entering Continuous Autonomy mode.");
                             let public_narrative = memory_clone.get_public_narrative().await;
                             let previous_sessions = load_recent_autonomy_sessions(5).await;
                             let autonomy_event = Event {
-                                platform: "discord:1480192647657427044".to_string(),
+                                platform: "discord:1480192647657427044:0:0".to_string(),
                                 scope: Scope::Public {
                                     channel_id: "1480192647657427044".to_string(),
                                     user_id: "apis_autonomy".to_string(),
@@ -498,6 +636,8 @@ impl Engine {
                             };
                             let _ = sender_clone.send(autonomy_event).await;
                         });
+                        let mut guard = autonomy_handle_bg_inner.lock().await;
+                        *guard = Some(handle);
                     }
                 }));
 
@@ -520,6 +660,7 @@ impl Engine {
                 let semaphore_bg = self.concurrency_semaphore.clone();
                 let scope_locks_bg = self.scope_locks.clone();
                 let autonomy_sender_bg = autonomy_sender.clone();
+                let autonomy_handle_bg = autonomy_handle.clone();
 
                 let available = self.concurrency_semaphore.available_permits();
                 tracing::info!("[PARALLEL] 🐝 Spawning event from {} (scope: {}) — {}/{} inference slots available",
@@ -591,7 +732,8 @@ impl Engine {
                         if let Some(ref sender) = autonomy_sender_bg {
                             let sender_clone = sender.clone();
                             let memory_clone = memory_bg.clone();
-                            tokio::spawn(async move {
+                            let autonomy_handle_bg_inner = autonomy_handle_bg.clone();
+                            let handle = tokio::spawn(async move {
                                 tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
                                 tracing::info!("[AUTONOMY] 🐝 5-minute idle timer fired. Entering Continuous Autonomy mode.");
                                 
@@ -599,7 +741,7 @@ impl Engine {
                                 let previous_sessions = load_recent_autonomy_sessions(5).await;
                                 
                                 let autonomy_event = Event {
-                                    platform: "discord:1480192647657427044".to_string(),
+                                    platform: "discord:1480192647657427044:0:0".to_string(),
                                     scope: Scope::Public {
                                         channel_id: "1480192647657427044".to_string(),
                                         user_id: "apis_autonomy".to_string(),
@@ -625,6 +767,8 @@ impl Engine {
                                 };
                                 let _ = sender_clone.send(autonomy_event).await;
                             });
+                            let mut guard = autonomy_handle_bg_inner.lock().await;
+                            *guard = Some(handle);
                         }
                     }
 

@@ -191,6 +191,9 @@ impl Provider for OllamaProvider {
                     if let Some(msg) = parsed.get("message") {
                         if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
                             full_response.push_str(content);
+                            // NOTE: .content is the JSON plan — do NOT send to telemetry.
+                            // Only .thinking tokens are streamed to telemetry.
+                            // Tool results are batch-sent by each tool's own telemetry_tx.
                         }
 
                         // Some models stream reasoning separately in a 'thinking' key

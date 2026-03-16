@@ -48,6 +48,7 @@ impl LessonsManager {
     }
 
     pub async fn add_lesson(&self, scope: &Scope, lesson: &Lesson) -> std::io::Result<()> {
+        tracing::debug!("[MEMORY:Lessons] add_lesson: scope='{}' keywords={:?} confidence={}", scope.to_key(), lesson.keywords, lesson.confidence);
         let path = self.get_lessons_path(scope);
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent).await;
@@ -76,6 +77,7 @@ impl LessonsManager {
                 }
             }
         }
+        tracing::debug!("[MEMORY:Lessons] read_lessons: scope='{}' count={}", scope.to_key(), lessons.len());
         lessons
     }
 }

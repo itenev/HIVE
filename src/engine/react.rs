@@ -24,6 +24,8 @@ pub async fn execute_react_loop(
     capabilities: Arc<AgentCapabilities>,
     teacher: Arc<Teacher>,
 ) -> (String, usize, Vec<(String, String)>) {
+    tracing::debug!("[REACT] ▶ Starting ReAct loop for author='{}' platform='{}' history_len={}",
+        event.author_name, event.platform, history.len());
     let tool_list = agent.get_available_tools_text_for_platform(&event.platform);
     
     // Update and inject homeostatic drive state as ambient context
@@ -50,6 +52,8 @@ pub async fn execute_react_loop(
     // The inner ReAct loop
     loop {
         current_turn += 1;
+        tracing::debug!("[REACT] === Turn {} === (observer_attempts={}, completed_tools={})",
+            current_turn, observer_attempts, completed_tools.len());
 
         if current_turn > 1 && current_turn % checkpoint_interval == 1 {
             let platform_name = event.platform.split(':').next().unwrap_or("");
@@ -73,7 +77,7 @@ pub async fn execute_react_loop(
 
         context_from_agent.push_str(&format!("\n\nReAct Loop Turn {}\n", current_turn));
         
-        let candidate_text = match provider.generate(&base_system_prompt, history, event, &context_from_agent, if current_turn == 1 { Some(telemetry_tx.clone()) } else { None }).await {
+        let candidate_text = match provider.generate(&base_system_prompt, history, event, &context_from_agent, Some(telemetry_tx.clone())).await {
             Ok(text) => text,
             Err(e) => {
                 tracing::error!("[AGENT LOOP] Provider Error: {:?}", e);
@@ -87,6 +91,7 @@ pub async fn execute_react_loop(
         }
 
         let cleaned_json = crate::engine::repair::repair_planner_json(&candidate_text);
+        tracing::trace!("[REACT] Turn {} candidate_text len={}, cleaned_json len={}", current_turn, candidate_text.len(), cleaned_json.len());
         
         let plan = match serde_json::from_str::<crate::agent::planner::AgentPlan>(&cleaned_json) {
             Ok(p) => {
@@ -155,6 +160,9 @@ pub async fn execute_react_loop(
                 standard_tasks.push(t);
             }
         }
+
+        tracing::debug!("[REACT] Turn {} plan classified: standard={}, reply={}, react={}, no_tools={}",
+            current_turn, standard_tasks.len(), reply_task.is_some(), react_tasks.len(), no_tools);
         
         if no_tools {
             tracing::warn!("[AGENT LOOP] ⚠️ Turn {} produced no valid tools. Injecting error to prompt...", current_turn);
@@ -203,6 +211,7 @@ pub async fn execute_react_loop(
             let is_admin = capabilities.admin_users.contains(&event.author_id);
             for task in standard_plan.tasks {
                 if capabilities.admin_tools.contains(&task.tool_type) && !is_admin {
+                    tracing::warn!("[REACT] 🛡️ SECURITY: Non-admin tried admin tool '{}' (user='{}')", task.tool_type, event.author_id);
                     failed_admin_attempts.push(crate::models::tool::ToolResult {
                         task_id: task.task_id.clone(),
                         output: format!("SECURITY VIOLATION: Tool {} requires [ADMIN ONLY] privileges. Your request is denied.", task.tool_type),
