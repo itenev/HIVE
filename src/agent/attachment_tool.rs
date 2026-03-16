@@ -60,14 +60,9 @@ pub async fn execute_read_attachment(
                         };
                     }
                     if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                        let output_text = if text.len() > 30_000 {
-                            format!("{}...\n\n[TRUNCATED: original length {} bytes]", &text[..30_000], size)
-                        } else {
-                            text // Return raw text without any formatting headers
-                        };
                         ToolResult {
                             task_id,
-                            output: output_text,
+                            output: text, // Return full content — 10MB hard limit is enforced above
                             tokens_used: 0,
                             status: ToolStatus::Success,
                         }

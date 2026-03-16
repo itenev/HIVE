@@ -237,13 +237,25 @@ pub async fn execute_react_loop(
             
             let result_count = tool_results.len();
             for res in &tool_results {
-                context_from_agent.push_str(&format!("Turn {} - Task {}: {:?}\nOutput: {}\n\n", current_turn, res.task_id, res.status, res.output));
-                // Store raw output in the HashMap for reliable source forwarding.
-                // This avoids the split("\n\n") fragmentation bug where multi-line
-                // tool outputs containing double-newlines would get truncated.
+                // Store FULL raw output in the HashMap for reliable source forwarding.
+                // This is the authoritative copy used for verbatim delivery to the user.
                 if matches!(res.status, crate::models::tool::ToolStatus::Success) {
                     tool_outputs.insert(res.task_id.clone(), res.output.clone());
                 }
+
+                // For LLM context, cap large outputs to prevent prompt bloat.
+                // The LLM only needs enough to reason about the result, not the
+                // full content (which may be 55KB+ for read_attachment).
+                const LLM_CONTEXT_CAP: usize = 8000;
+                let display_output = if res.output.len() > LLM_CONTEXT_CAP {
+                    format!(
+                        "{}...\n\n[Full output is {} bytes — stored for verbatim forwarding via source field or auto-injection. Do NOT attempt to reproduce this content yourself.]",
+                        &res.output[..LLM_CONTEXT_CAP], res.output.len()
+                    )
+                } else {
+                    res.output.clone()
+                };
+                context_from_agent.push_str(&format!("Turn {} - Task {}: {:?}\nOutput: {}\n\n", current_turn, res.task_id, res.status, display_output));
             }
             completed_tools.extend(task_meta);
             tracing::info!("[AGENT LOOP] 🔄 Turn {} executed {} tools. Looping...", current_turn, result_count);
