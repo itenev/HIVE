@@ -110,7 +110,7 @@ impl DiscordPlatform {
             tts_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             continue_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
             is_tending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            aicoms_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            aicoms_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bot_debounce: Arc::new(Mutex::new(std::collections::HashMap::new())),
             memory,
         }
