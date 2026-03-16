@@ -164,6 +164,21 @@ pub async fn execute_react_loop(
 
         tracing::debug!("[REACT] Turn {} plan classified: standard={}, reply={}, react={}, no_tools={}",
             current_turn, standard_tasks.len(), reply_task.is_some(), react_tasks.len(), no_tools);
+
+        // ─── TELEMETRY: Send thought + tool list after plan parsing ───────
+        {
+            let thought_str = plan.thought.as_deref().unwrap_or("(no thought)");
+            let tool_list: Vec<String> = standard_tasks.iter()
+                .map(|t| format!("🔧 {}", t.tool_type))
+                .chain(react_tasks.iter().map(|t| format!("⚡ {}", t.tool_type)))
+                .chain(reply_task.iter().map(|t| format!("💬 {}", t.tool_type)))
+                .collect();
+            let telemetry_msg = format!(
+                "💭 **Thinking:**\n{}\n\n**Plan (Turn {}):**\n{}",
+                thought_str, current_turn, tool_list.join("\n")
+            );
+            let _ = telemetry_tx.send(telemetry_msg).await;
+        }
         
         if no_tools {
             tracing::warn!("[AGENT LOOP] ⚠️ Turn {} produced no valid tools. Injecting error to prompt...", current_turn);
@@ -258,6 +273,17 @@ pub async fn execute_react_loop(
                 context_from_agent.push_str(&format!("Turn {} - Task {}: {:?}\nOutput: {}\n\n", current_turn, res.task_id, res.status, display_output));
             }
             completed_tools.extend(task_meta);
+
+            // ─── TELEMETRY: Send tool completion status ─────────────────
+            {
+                let tool_status: Vec<String> = tool_results.iter()
+                    .map(|r| format!("✅ {} — {:?}", r.task_id, r.status))
+                    .collect();
+                let msg = format!("**Turn {} — {} tools executed:**\n{}",
+                    current_turn, result_count, tool_status.join("\n"));
+                let _ = telemetry_tx.send(msg).await;
+            }
+
             tracing::info!("[AGENT LOOP] 🔄 Turn {} executed {} tools. Looping...", current_turn, result_count);
         }
         
