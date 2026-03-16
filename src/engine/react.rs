@@ -276,18 +276,23 @@ pub async fn execute_react_loop(
             }
 
             // OUTPUT FORWARDING — Phase 2: Automatic injection safety net.
-            // If the LLM's reply is short (< 2000 chars) but there exists a large
-            // tool output (> 2000 chars) that the LLM failed to forward via `source`,
-            // the engine auto-appends the largest one. This prevents the common failure
-            // mode where the LLM says "Here is the content:" but doesn't actually
-            // include the content because it forgot to use the source field.
+            // ONLY for verbatim-forwarding tools (read_attachment, download).
+            // NEVER auto-inject web_search, researcher, codebase_read etc. — those
+            // contain raw internal results that should never be shown to users.
             if reply.source.is_none() && candidate_answer.len() < 2000 {
+                let verbatim_tools = ["read_attachment", "download"];
                 if let Some((_largest_id, largest_output)) = tool_outputs.iter()
+                    .filter(|(id, _)| {
+                        // Only consider outputs from verbatim-safe tools
+                        completed_tools.iter().any(|(tid, ttype)| {
+                            tid == *id && verbatim_tools.contains(&ttype.as_str())
+                        })
+                    })
                     .max_by_key(|(_, v)| v.len())
                     .filter(|(_, v)| v.len() > 2000)
                 {
                     tracing::info!(
-                        "[OUTPUT FORWARD] 🛡️ Auto-injecting largest tool output ({} bytes) — LLM reply was only {} chars but large tool output available.",
+                        "[OUTPUT FORWARD] 🛡️ Auto-injecting verbatim tool output ({} bytes) — LLM reply was only {} chars.",
                         largest_output.len(), candidate_answer.len()
                     );
                     candidate_answer = format!("{}\n\n{}", candidate_answer.trim(), largest_output.trim());
@@ -332,7 +337,26 @@ pub async fn execute_react_loop(
                 ));
                 tracing::warn!("[OBSERVER BLOCKED]\nCategory: {}\nWhat Worked: {}\nWhat Went Wrong: {}\nHow to Fix: {}", audit_result.failure_category, audit_result.what_worked, audit_result.what_went_wrong, audit_result.how_to_fix);
                 
-                let guidance = format!("[INTERNAL AUDIT: INVISIBLE TO USER] CORRECTION REQUIRED FOR YOUR REPLY\nFAILURE CATEGORY: {}\nWHAT WORKED: {}\nWHAT WENT WRONG: {}\nHOW TO FIX: {}\n\n", audit_result.failure_category, audit_result.what_worked, audit_result.what_went_wrong, audit_result.how_to_fix);
+                // Include a truncated copy of the rejected candidate so the LLM
+                // knows exactly what it wrote that was wrong. Without this, it just
+                // gets told "fix it" but can't see the specific problem.
+                let rejected_preview = if candidate_answer.len() > 500 {
+                    format!("{}...[truncated]", &candidate_answer[..500])
+                } else {
+                    candidate_answer.clone()
+                };
+                let guidance = format!(
+                    "[INTERNAL AUDIT: INVISIBLE TO USER] CORRECTION REQUIRED FOR YOUR REPLY\n\
+                    FAILURE CATEGORY: {}\n\
+                    WHAT WORKED: {}\n\
+                    WHAT WENT WRONG: {}\n\
+                    HOW TO FIX: {}\n\
+                    YOUR REJECTED OUTPUT WAS:\n---\n{}\n---\n\
+                    You MUST rewrite your reply_to_request to fix the above issue. Do NOT include raw tool outputs, search results, or internal data in your reply.\n\n",
+                    audit_result.failure_category, audit_result.what_worked,
+                    audit_result.what_went_wrong, audit_result.how_to_fix,
+                    rejected_preview
+                );
                 context_from_agent.push_str(&guidance);
                 
                 let msg = format!("\n🛑 **[OBSERVER BLOCKED GENERATION]**\n**Category:** {}\n**Violation:** {}\n**Fixing...**", audit_result.failure_category, audit_result.what_went_wrong);
