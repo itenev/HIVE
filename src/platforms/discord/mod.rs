@@ -12,6 +12,18 @@ use std::sync::Arc;
 use crate::models::message::{Event, Response};
 use crate::platforms::{Platform, PlatformError};
 
+/// Buffer for debouncing bot messages. Key = "channel_id:bot_id".
+/// Each entry holds accumulated text chunks and a cancel token for the pending flush timer.
+pub(crate) type BotDebounceBuffer = Arc<Mutex<std::collections::HashMap<String, BotDebounceEntry>>>;
+
+pub(crate) struct BotDebounceEntry {
+    pub chunks: Vec<String>,
+    pub author_name: String,
+    pub author_id: String,
+    pub channel_id: u64,
+    pub generation: u64, // incremented on each new chunk; timer only fires if generation matches
+}
+
 pub struct Handler {
     pub(crate) event_sender: Sender<Event>,
     pub(crate) bot_user_id: Mutex<Option<serenity::model::id::UserId>>,
@@ -20,6 +32,7 @@ pub struct Handler {
     pub(crate) continue_responses: Arc<Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<bool>>>>,
     pub(crate) is_tending: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) aicoms_enabled: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) bot_debounce: BotDebounceBuffer,
     pub(crate) memory: Arc<crate::memory::MemoryStore>,
 }
 
@@ -84,6 +97,7 @@ pub struct DiscordPlatform {
     continue_responses: Arc<Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<bool>>>>,
     is_tending: Arc<std::sync::atomic::AtomicBool>,
     aicoms_enabled: Arc<std::sync::atomic::AtomicBool>,
+    bot_debounce: BotDebounceBuffer,
     memory: Arc<crate::memory::MemoryStore>,
 }
 
@@ -97,6 +111,7 @@ impl DiscordPlatform {
             continue_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
             is_tending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             aicoms_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            bot_debounce: Arc::new(Mutex::new(std::collections::HashMap::new())),
             memory,
         }
     }
@@ -119,6 +134,7 @@ impl Platform for DiscordPlatform {
             continue_responses: self.continue_responses.clone(),
             is_tending: self.is_tending.clone(),
             aicoms_enabled: self.aicoms_enabled.clone(),
+            bot_debounce: self.bot_debounce.clone(),
             memory: self.memory.clone(),
         };
 
