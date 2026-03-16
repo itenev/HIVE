@@ -253,14 +253,32 @@ pub async fn execute_react_loop(
             observer_attempts += 1;
             let mut candidate_answer = reply.description;
 
-            // OUTPUT FORWARDING: If the reply references a source task_id,
-            // look up the raw output directly from the tool_outputs HashMap.
+            // OUTPUT FORWARDING — Phase 1: Explicit source reference from LLM
             if let Some(ref source_id) = reply.source {
                 if let Some(raw_output) = tool_outputs.get(source_id) {
                     candidate_answer = format!("{}\n\n{}", candidate_answer.trim(), raw_output.trim());
                     tracing::info!("[OUTPUT FORWARD] Appended raw output from task '{}' ({} bytes) to reply.", source_id, raw_output.len());
                 } else {
                     tracing::warn!("[OUTPUT FORWARD] Source task '{}' not found in tool_outputs map. Delivering description only.", source_id);
+                }
+            }
+
+            // OUTPUT FORWARDING — Phase 2: Automatic injection safety net.
+            // If the LLM's reply is short (< 2000 chars) but there exists a large
+            // tool output (> 2000 chars) that the LLM failed to forward via `source`,
+            // the engine auto-appends the largest one. This prevents the common failure
+            // mode where the LLM says "Here is the content:" but doesn't actually
+            // include the content because it forgot to use the source field.
+            if reply.source.is_none() && candidate_answer.len() < 2000 {
+                if let Some((_largest_id, largest_output)) = tool_outputs.iter()
+                    .max_by_key(|(_, v)| v.len())
+                    .filter(|(_, v)| v.len() > 2000)
+                {
+                    tracing::info!(
+                        "[OUTPUT FORWARD] 🛡️ Auto-injecting largest tool output ({} bytes) — LLM reply was only {} chars but large tool output available.",
+                        largest_output.len(), candidate_answer.len()
+                    );
+                    candidate_answer = format!("{}\n\n{}", candidate_answer.trim(), largest_output.trim());
                 }
             }
 
