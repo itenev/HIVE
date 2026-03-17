@@ -69,8 +69,12 @@ pub async fn execute_search_timeline(
                 std::path::PathBuf::from(format!("memory/private_{}/timeline.jsonl", user_id))
             }
         };
+        tracing::debug!("[AGENT:timeline] Default scope path: {:?} exists={}", path, path.exists());
         vec![path]
     };
+
+    tracing::debug!("[AGENT:timeline] query='{}' scope_override='{}' paths_count={} paths={:?}", 
+        query, scope_override, timeline_paths.len(), timeline_paths);
 
     if timeline_paths.is_empty() {
         return ToolResult {
@@ -86,40 +90,48 @@ pub async fn execute_search_timeline(
     let mut searched_count = 0;
 
     for timeline_path in &timeline_paths {
-        if let Ok(file) = tokio::fs::File::open(&timeline_path).await {
-            searched_count += 1;
-            let reader = BufReader::new(file);
-            let mut lines = reader.lines();
-            let mut all_lines = Vec::new();
-            while let Ok(Some(line)) = lines.next_line().await {
-                all_lines.push(line);
-            }
+        match tokio::fs::File::open(&timeline_path).await {
+            Ok(file) => {
+                searched_count += 1;
+                let reader = BufReader::new(file);
+                let mut lines = reader.lines();
+                let mut all_lines = Vec::new();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    all_lines.push(line);
+                }
 
-            // Label for multi-file results: extract user_id from path
-            let parent_name = timeline_path.parent()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown");
+                tracing::debug!("[AGENT:timeline] Opened {:?}, read {} lines, searching for '{}'", 
+                    timeline_path, all_lines.len(), query);
 
-            for line in all_lines.iter().rev() {
-                if line.to_lowercase().contains(&query)
-                    && let Ok(json) = serde_json::from_str::<serde_json::Value>(line)
-                        && let (Some(author), Some(content)) = (json["author_name"].as_str(), json["content"].as_str()) {
-                            let prefix = if timeline_paths.len() > 1 {
-                                format!("[{}] {}", parent_name, author)
-                            } else {
-                                author.to_string()
-                            };
-                            results.push(format!("{}: {}", prefix, content));
-                            if results.len() >= limit {
-                                break;
+                // Label for multi-file results: extract user_id from path
+                let parent_name = timeline_path.parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+
+                for line in all_lines.iter().rev() {
+                    if line.to_lowercase().contains(&query)
+                        && let Ok(json) = serde_json::from_str::<serde_json::Value>(line)
+                            && let (Some(author), Some(content)) = (json["author_name"].as_str(), json["content"].as_str()) {
+                                let prefix = if timeline_paths.len() > 1 {
+                                    format!("[{}] {}", parent_name, author)
+                                } else {
+                                    author.to_string()
+                                };
+                                results.push(format!("{}: {}", prefix, content));
+                                if results.len() >= limit {
+                                    break;
+                                }
                             }
-                        }
+                }
             }
+            Err(e) => {
+                tracing::warn!("[AGENT:timeline] FAILED to open {:?}: {}", timeline_path, e);
+            }
+        }
 
-            if results.len() >= limit {
-                break;
-            }
+        if results.len() >= limit {
+            break;
         }
     }
 
