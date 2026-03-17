@@ -25,7 +25,10 @@ pub async fn execute_search_timeline(
 
     // Split query into individual search terms for ANY-word matching
     let query_terms: Vec<&str> = query_raw.split_whitespace().collect();
-    let is_browse = action == "recent" || action == "browse" || action == "read" || (action == "search" && query_raw.is_empty());
+    let is_browse = action == "recent" || action == "browse" || action == "read";
+    let is_exact = action == "exact";
+    // If action is "search" but no query provided, treat as browse
+    let is_browse = is_browse || (action == "search" && query_raw.is_empty());
 
     // The real directory structure is:
     //   memory/public_{channel_id}/{user_id}/timeline.jsonl   (public)
@@ -95,8 +98,8 @@ pub async fn execute_search_timeline(
                     all_lines.push(line);
                 }
 
-                tracing::debug!("[AGENT:timeline] Opened {:?}, read {} lines, is_browse={}, searching for any of {:?}", 
-                    timeline_path, all_lines.len(), is_browse, query_terms);
+                tracing::debug!("[AGENT:timeline] Opened {:?}, read {} lines, is_browse={} is_exact={}, query_terms={:?}", 
+                    timeline_path, all_lines.len(), is_browse, is_exact, query_terms);
 
                 // Label for multi-file results: extract user_id from path
                 let parent_name = timeline_path.parent()
@@ -105,9 +108,12 @@ pub async fn execute_search_timeline(
                     .unwrap_or("unknown");
 
                 for line in all_lines.iter().rev() {
-                    // Browse mode: return all entries. Search mode: match any query term.
+                    // Browse: return all. Exact: full-phrase match. Search: any-word match.
                     let matches = if is_browse {
                         true
+                    } else if is_exact {
+                        let line_lower = line.to_lowercase();
+                        line_lower.contains(&query_raw)
                     } else {
                         let line_lower = line.to_lowercase();
                         query_terms.iter().any(|term| line_lower.contains(term))
