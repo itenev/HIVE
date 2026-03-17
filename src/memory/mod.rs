@@ -34,7 +34,7 @@ use crate::computer::turing_grid::TuringGrid;
 pub struct MemoryStore {
     pub working: WorkingMemory,
     pub timeline: TimelineManager,
-    pub synaptic: Neo4jGraph,
+    pub synaptic: Arc<Neo4jGraph>,
     pub scratch: Scratchpad,
     pub autosave: AutosaveManager,
     pub preferences: PreferenceStore,
@@ -65,7 +65,7 @@ impl MemoryStore {
         let memory_dir = base_dir.unwrap_or(default_dir);
         let working = WorkingMemory::new(Some(memory_dir.clone()));
         let autosave = AutosaveManager::new();
-        let synaptic = Neo4jGraph::new();
+        let synaptic = Arc::new(Neo4jGraph::new(Some(memory_dir.clone())));
         let timeline = TimelineManager::new(Some(memory_dir.clone()));
         let scratch = Scratchpad::new(Some(memory_dir.clone()));
         let preferences = PreferenceStore::new(Some(memory_dir.clone()));
@@ -98,6 +98,7 @@ impl MemoryStore {
     pub async fn init(&self) {
         tracing::info!("[MEMORY] ▶ Initializing MemoryStore...");
         self.working.load_persisted().await;
+        self.synaptic.load().await;
         self.moderation.load().await;
         // Init grid logic:
         let grid_path = self.turing_grid.lock().await.persistence_path.clone();
