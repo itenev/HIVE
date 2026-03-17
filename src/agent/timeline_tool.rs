@@ -21,6 +21,7 @@ pub async fn execute_search_timeline(
     let query = extract_tag(&description, "query:").unwrap_or_default().to_lowercase();
     let limit_str = extract_tag(&description, "limit:").unwrap_or("20".to_string());
     let limit: usize = limit_str.parse().unwrap_or(20);
+    let scope_override = extract_tag(&description, "scope:").unwrap_or_default().to_lowercase();
 
     if query.is_empty() {
         return ToolResult { 
@@ -31,35 +32,85 @@ pub async fn execute_search_timeline(
         };
     }
 
-    let dir_path = match current_scope {
-        Scope::Public { channel_id, .. } => std::path::PathBuf::from(format!("memory/public_{}", channel_id)),
-        Scope::Private { user_id } => std::path::PathBuf::from(format!("memory/private_{}", user_id)),
+    // Determine which timeline directories to search:
+    // - scope:[all_public] → search all public_* directories
+    // - scope:[<channel_id>] → search a specific channel  
+    // - no scope → search current channel only
+    let dirs_to_search: Vec<std::path::PathBuf> = if scope_override == "all_public" {
+        // Sweep all public timelines
+        let mut dirs = Vec::new();
+        if let Ok(mut entries) = tokio::fs::read_dir("memory").await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("public_") && entry.path().is_dir() {
+                    dirs.push(entry.path());
+                }
+            }
+        }
+        if dirs.is_empty() {
+            return ToolResult {
+                task_id,
+                output: "No public timelines exist yet.".to_string(),
+                tokens_used: 0,
+                status: ToolStatus::Success,
+            };
+        }
+        dirs
+    } else if !scope_override.is_empty() {
+        // Cross-channel: search a specific channel by ID
+        vec![std::path::PathBuf::from(format!("memory/public_{}", scope_override))]
+    } else {
+        // Default: current scope only
+        let dir_path = match current_scope {
+            Scope::Public { channel_id, .. } => std::path::PathBuf::from(format!("memory/public_{}", channel_id)),
+            Scope::Private { user_id } => std::path::PathBuf::from(format!("memory/private_{}", user_id)),
+        };
+        vec![dir_path]
     };
 
-    let timeline_path = dir_path.join("timeline.jsonl");
-    
-    // We will search backwards (most recent first) up to the limit
+    // Search across all targeted directories
     let mut results = Vec::new();
+    let mut searched_count = 0;
 
-    if let Ok(file) = tokio::fs::File::open(&timeline_path).await {
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-        let mut all_lines = Vec::new();
-        while let Ok(Some(line)) = lines.next_line().await {
-            all_lines.push(line);
-        }
-        
-        for line in all_lines.iter().rev() {
-            if line.to_lowercase().contains(&query)
-                && let Ok(json) = serde_json::from_str::<serde_json::Value>(line)
-                    && let (Some(author), Some(content)) = (json["author_name"].as_str(), json["content"].as_str()) {
-                        results.push(format!("{}: {}", author, content));
-                        if results.len() >= limit {
-                            break;
+    for dir_path in &dirs_to_search {
+        let timeline_path = dir_path.join("timeline.jsonl");
+        if let Ok(file) = tokio::fs::File::open(&timeline_path).await {
+            searched_count += 1;
+            let reader = BufReader::new(file);
+            let mut lines = reader.lines();
+            let mut all_lines = Vec::new();
+            while let Ok(Some(line)) = lines.next_line().await {
+                all_lines.push(line);
+            }
+            
+            // Extract channel name for multi-channel context
+            let channel_label = dir_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+
+            for line in all_lines.iter().rev() {
+                if line.to_lowercase().contains(&query)
+                    && let Ok(json) = serde_json::from_str::<serde_json::Value>(line)
+                        && let (Some(author), Some(content)) = (json["author_name"].as_str(), json["content"].as_str()) {
+                            let prefix = if dirs_to_search.len() > 1 {
+                                format!("[{}] {}", channel_label, author)
+                            } else {
+                                author.to_string()
+                            };
+                            results.push(format!("{}: {}", prefix, content));
+                            if results.len() >= limit {
+                                break;
+                            }
                         }
-                    }
+            }
+
+            if results.len() >= limit {
+                break;
+            }
         }
-    } else {
+    }
+
+    if searched_count == 0 {
         return ToolResult {
             task_id,
             output: "No long-term timeline exists for this scope yet.".to_string(),
@@ -73,14 +124,14 @@ pub async fn execute_search_timeline(
     if results.is_empty() {
         ToolResult {
             task_id,
-            output: format!("No matches found for '{}' in the long-term timeline.", query),
+            output: format!("No matches found for '{}' across {} timeline(s) searched.", query, searched_count),
             tokens_used: 0,
             status: ToolStatus::Success,
         }
     } else {
         ToolResult {
             task_id,
-            output: format!("Timeline Search Results for '{}':\n\n{}", query, results.join("\n\n")),
+            output: format!("Timeline Search Results for '{}' ({} timeline(s) searched):\n\n{}", query, searched_count, results.join("\n\n")),
             tokens_used: 0,
             status: ToolStatus::Success,
         }
@@ -131,5 +182,29 @@ mod tests {
 
         // Cleanup
         let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_cross_channel_search() {
+        let mem = Arc::new(MemoryStore::default());
+        let scope = Scope::Public { channel_id: "channel_A".to_string(), user_id: "user1".to_string() };
+
+        // Create a timeline in a DIFFERENT channel (channel_B)
+        let dir_b = std::path::PathBuf::from("memory/public_channel_B");
+        tokio::fs::create_dir_all(&dir_b).await.unwrap();
+        let ev = serde_json::json!({"author_name": "Zenzic", "content": "Orthogonal inversion mirrored"}).to_string();
+        tokio::fs::write(dir_b.join("timeline.jsonl"), format!("{}\n", ev)).await.unwrap();
+
+        // Searching from channel_A for Zenzic should fail (default scope)
+        let res = execute_search_timeline("1".into(), "query:[zenzic]".into(), mem.clone(), None, &scope).await;
+        assert!(res.output.contains("No long-term timeline exists"), "Default scope should not see other channels");
+
+        // With scope:[channel_B], should find it
+        let res = execute_search_timeline("2".into(), "query:[zenzic] scope:[channel_B]".into(), mem.clone(), None, &scope).await;
+        assert_eq!(res.status, ToolStatus::Success);
+        assert!(res.output.contains("Zenzic"), "Cross-channel search should find Zenzic, got: {}", res.output);
+
+        // Cleanup
+        let _ = tokio::fs::remove_dir_all(dir_b).await;
     }
 }
