@@ -504,7 +504,11 @@ impl Engine {
                 let prov_clone = self.provider.clone();
                 let mem_clone = self.memory.clone();
                 let scope_clone = event.scope.clone();
+                let semaphore_synth = self.concurrency_semaphore.clone();
                 tokio::spawn(async move {
+                    // Acquire inference slot — prevents colliding with active user/autonomy inference
+                    let _permit = semaphore_synth.acquire().await.expect("Semaphore closed");
+                    tracing::debug!("[SYNTHESIS] 🎫 Acquired inference slot for background synthesis.");
                     if bg_synth_needed {
                         let _ = crate::agent::synthesis::synthesize_50_turn(prov_clone.clone(), mem_clone.clone(), scope_clone.clone()).await;
                     }

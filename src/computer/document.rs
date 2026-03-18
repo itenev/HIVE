@@ -200,12 +200,37 @@ impl DocumentComposer {
         let html_path_clone = temp_html_path.clone();
 
         let render_result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-            let browser = Browser::new(LaunchOptions {
-                headless: true,
-                sandbox: false,
-                ..Default::default()
-            })
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+            // Retry loop for Browser::new() — Chrome 146+ has a timing race where
+            // the DevTools WebSocket server isn't ready when the crate tries to connect,
+            // causing "WebSocket protocol error: Handshake not finished".
+            let mut browser_result = None;
+            for attempt in 0..3u32 {
+                if attempt > 0 {
+                    let delay = std::time::Duration::from_secs(1 << attempt); // 2s, 4s
+                    tracing::warn!("[PDF] Chrome WebSocket retry #{} after {:?}", attempt + 1, delay);
+                    std::thread::sleep(delay);
+                }
+                match Browser::new(LaunchOptions {
+                    headless: true,
+                    sandbox: false,
+                    idle_browser_timeout: std::time::Duration::from_secs(30),
+                    ..Default::default()
+                }) {
+                    Ok(b) => {
+                        browser_result = Some(b);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!("[PDF] Chrome launch attempt {} failed: {}", attempt + 1, e);
+                        if attempt == 2 {
+                            return Err(std::io::Error::other(format!(
+                                "Chrome failed after 3 attempts: {}", e
+                            )));
+                        }
+                    }
+                }
+            }
+            let browser = browser_result.unwrap();
 
             let tab = browser
                 .new_tab()

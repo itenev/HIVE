@@ -34,7 +34,7 @@ impl ToolExecutor {
         };
 
         // We use the shared provider for execution, but could swap model if template.model_override is set.
-        let result = self.provider.generate(&system_prompt, &[], &dummy_event, "", telemetry_tx).await;
+        let result = self.provider.generate(&system_prompt, &[], &dummy_event, "", telemetry_tx, None).await;
 
         match result {
             Ok(output) => {
@@ -72,7 +72,7 @@ mod tests {
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|sys, _, _, _ctx, _| {
+            .returning(|sys, _, _, _ctx, _, _| {
                 assert!(sys.contains("You are a test tool"));
                 assert!(sys.contains("Context"));
                 assert!(sys.contains("Task"));
@@ -98,7 +98,7 @@ mod tests {
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|_, _, _, _, _| Err(ProviderError::ConnectionError("Boom".into())));
+            .returning(|_, _, _, _, _, _| Err(ProviderError::ConnectionError("Boom".into())));
 
         let template = ToolTemplate {
             name: "test".into(),

@@ -30,7 +30,7 @@ pub async fn synthesize_50_turn(
         content: "Initiate 50-Turn Synthesis".into(),
     };
 
-    let result = provider.generate(&prompt, &[], &dummy_event, "", None).await.map_err(|e| e.to_string())?;
+    let result = provider.generate(&prompt, &[], &dummy_event, "", None, None).await.map_err(|e| e.to_string())?;
 
     let mut timelines = memory.timelines.read(&scope).await;
     timelines.last_50_turns = Some(crate::memory::TurnSummary {
@@ -70,7 +70,7 @@ pub async fn synthesize_24_hr(
         content: "Initiate 24-Hour Synthesis".into(),
     };
 
-    let result = provider.generate(&prompt, &[], &dummy_event, "", None).await.map_err(|e| e.to_string())?;
+    let result = provider.generate(&prompt, &[], &dummy_event, "", None, None).await.map_err(|e| e.to_string())?;
 
     let mut timelines = memory.timelines.read(&scope).await;
     timelines.last_24_hours = Some(crate::memory::DailySummary {
@@ -111,7 +111,7 @@ pub async fn synthesize_lifetime(
         content: "Initiate Lifetime Synthesis".into(),
     };
 
-    let result = provider.generate(&prompt, &[], &dummy_event, "", None).await.map_err(|e| e.to_string())?;
+    let result = provider.generate(&prompt, &[], &dummy_event, "", None, None).await.map_err(|e| e.to_string())?;
 
     let mut timelines_mem = memory.timelines.read(&scope).await;
     timelines_mem.lifetime = Some(crate::memory::LifetimeSummary {
@@ -132,7 +132,7 @@ mod tests {
     #[tokio::test]
     async fn test_synthesis_50_turn() {
         let mut mock = MockProvider::new();
-        mock.expect_generate().returning(|_, _, _, _, _| Ok("50 turn summary".to_string()));
+        mock.expect_generate().returning(|_, _, _, _, _, _| Ok("50 turn summary".to_string()));
         let memory = Arc::new(MemoryStore::default());
         let scope = Scope::Private { user_id: "u1".into() };
 
@@ -146,7 +146,7 @@ mod tests {
     #[tokio::test]
     async fn test_synthesis_24_hr() {
         let mut mock = MockProvider::new();
-        mock.expect_generate().returning(|_, _, _, _, _| Ok("24 hour summary".to_string()));
+        mock.expect_generate().returning(|_, _, _, _, _, _| Ok("24 hour summary".to_string()));
         let memory = Arc::new(MemoryStore::default());
         let scope = Scope::Private { user_id: "u1".into() };
 
@@ -160,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn test_synthesis_lifetime() {
         let mut mock = MockProvider::new();
-        mock.expect_generate().returning(|_, _, _, _, _| Ok("Lifetime summary".to_string()));
+        mock.expect_generate().returning(|_, _, _, _, _, _| Ok("Lifetime summary".to_string()));
         let memory = Arc::new(MemoryStore::default());
         let scope = Scope::Private { user_id: "u1".into() };
 
@@ -174,7 +174,7 @@ mod tests {
     #[tokio::test]
     async fn test_synthesis_failure() {
         let mut mock = MockProvider::new();
-        mock.expect_generate().returning(|_, _, _, _, _| Err(crate::providers::ProviderError::ConnectionError("fail".into())));
+        mock.expect_generate().returning(|_, _, _, _, _, _| Err(crate::providers::ProviderError::ConnectionError("fail".into())));
         let memory = Arc::new(MemoryStore::default());
         let scope = Scope::Private { user_id: "u1".into() };
 

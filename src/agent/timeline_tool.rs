@@ -19,8 +19,8 @@ pub async fn execute_search_timeline(
     tracing::debug!("[AGENT:timeline] ▶ task_id={}", task_id);
     let action = extract_tag(&description, "action:").unwrap_or("search".to_string()).to_lowercase();
     let query_raw = extract_tag(&description, "query:").unwrap_or_default().to_lowercase();
-    let limit_str = extract_tag(&description, "limit:").unwrap_or("20".to_string());
-    let limit: usize = limit_str.parse().unwrap_or(20);
+    let limit_str = extract_tag(&description, "limit:").unwrap_or("50".to_string());
+    let limit: usize = limit_str.parse().unwrap_or(50);
     let scope_override = extract_tag(&description, "scope:").unwrap_or_default().to_lowercase();
 
     // Split query into individual search terms for ANY-word matching

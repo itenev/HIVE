@@ -40,7 +40,7 @@ pub async fn execute_synthesizer(
     };
 
     match provider
-        .generate(&system_prompt, &[], &dummy_event, "", telemetry_tx)
+        .generate(&system_prompt, &[], &dummy_event, "", telemetry_tx, None)
         .await
     {
         Ok(output) => {
@@ -70,7 +70,7 @@ mod tests {
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|_, _, _, _, _| Ok("Synthesized Output".to_string()));
+            .returning(|_, _, _, _, _, _| Ok("Synthesized Output".to_string()));
 
         let provider = Arc::new(mock_provider);
         let res = execute_synthesizer("1".into(), "Summarize".into(), "Some context".into(), provider, None).await;
@@ -84,7 +84,7 @@ mod tests {
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|_, _, _, _, _| Err(crate::providers::ProviderError::ConnectionError("Timeout".into())));
+            .returning(|_, _, _, _, _, _| Err(crate::providers::ProviderError::ConnectionError("Timeout".into())));
 
         let provider = Arc::new(mock_provider);
         let res = execute_synthesizer("1".into(), "Summarize".into(), "Some context".into(), provider, None).await;

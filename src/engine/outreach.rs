@@ -227,7 +227,7 @@ impl OutreachGate {
             content: prompt.clone(),
         };
 
-        match self.provider.generate(&prompt, &[], &event, "", None).await {
+        match self.provider.generate(&prompt, &[], &event, "", None, None).await {
             Ok(response) => {
                 let upper = response.trim().to_uppercase();
                 if upper.contains("YES") {
@@ -339,7 +339,7 @@ mod tests {
         let root = tmp.path().to_str().unwrap();
         
         let mut mock = crate::providers::MockProvider::new();
-        mock.expect_generate().returning(|_, _, _, _, _| Ok("YES".into()));
+        mock.expect_generate().returning(|_, _, _, _, _, _| Ok("YES".into()));
         let gate = OutreachGate::new(root, Arc::new(mock));
 
         // 1. load nonexistent (gets default)
@@ -377,7 +377,7 @@ mod tests {
         
         // Mock that says "YES"
         let mut mock_yes = crate::providers::MockProvider::new();
-        mock_yes.expect_generate().returning(|_, _, _, _, _| Ok("YES".into()));
+        mock_yes.expect_generate().returning(|_, _, _, _, _, _| Ok("YES".into()));
         let gate_yes = OutreachGate::new(root, Arc::new(mock_yes));
 
         // Setup a user
@@ -416,7 +416,7 @@ mod tests {
         
         // Mock that says "NO"
         let mut mock_no = crate::providers::MockProvider::new();
-        mock_no.expect_generate().returning(|_, _, _, _, _| Ok("NO".into()));
+        mock_no.expect_generate().returning(|_, _, _, _, _, _| Ok("NO".into()));
         let gate_no = OutreachGate::new(root, Arc::new(mock_no));
 
         gate_no.record_outreach("u2");
@@ -426,7 +426,7 @@ mod tests {
 
         // Mock that FAILS (tests fallback threshold logic)
         let mut mock_err = crate::providers::MockProvider::new();
-        mock_err.expect_generate().returning(|_, _, _, _, _| Err(crate::providers::ProviderError::ConnectionError("offline".into())));
+        mock_err.expect_generate().returning(|_, _, _, _, _, _| Err(crate::providers::ProviderError::ConnectionError("offline".into())));
         let gate_err = OutreachGate::new(root, Arc::new(mock_err));
 
         gate_err.set_frequency("u3", OutreachFrequency::Low); // 24hr limit

@@ -17,7 +17,7 @@ pub async fn execute_react_loop(
     history: &[Event],
     telemetry_tx: mpsc::Sender<String>,
     platforms: &HashMap<String, Box<dyn crate::platforms::Platform>>,
-    agent: &AgentManager,
+    agent: &Arc<AgentManager>,
     provider: Arc<dyn Provider>,
     memory: Arc<MemoryStore>,
     drives: Arc<DriveSystem>,
@@ -78,7 +78,7 @@ pub async fn execute_react_loop(
 
         context_from_agent.push_str(&format!("\n\nReAct Loop Turn {}\n", current_turn));
         
-        let candidate_text = match provider.generate(&base_system_prompt, history, event, &context_from_agent, Some(telemetry_tx.clone())).await {
+        let candidate_text = match provider.generate(&base_system_prompt, history, event, &context_from_agent, Some(telemetry_tx.clone()), None).await {
             Ok(text) => text,
             Err(e) => {
                 tracing::error!("[AGENT LOOP] Provider Error: {:?}", e);
@@ -247,7 +247,7 @@ pub async fn execute_react_loop(
             };
 
             let tx_clone = telemetry_tx.clone();
-            let mut tool_results = agent.execute_plan(safe_plan, &event.content, event.scope.clone(), Some(tx_clone)).await;
+            let mut tool_results = agent.execute_plan(safe_plan, &event.content, event.scope.clone(), Some(tx_clone), Some(agent.clone()), Some(capabilities.clone())).await;
             
             // Inject the failed security tools back into the results so the agent sees them fail
             tool_results.extend(failed_admin_attempts);
@@ -273,6 +273,47 @@ pub async fn execute_react_loop(
                 } else {
                     res.output.clone()
                 };
+
+                // ─── CONTEXT SANITIZER: Strip internal workflow instructions ────
+                // Tool outputs (especially file_writer) embed agent-only workflow
+                // directives like [VISUAL_QA], "IMPORTANT: Look at the preview...",
+                // and "Once satisfied, include this EXACT tag...". If these persist
+                // in context, the model copies them into its reply_to_request,
+                // the Observer catches them as `unparsed_tools`, blocks the reply,
+                // and the model rewrites — but the original instructions are STILL
+                // in context, causing an infinite block loop.
+                //
+                // Solution: strip workflow meta-instructions from the display output.
+                // Keep the actionable content (paths, ATTACH_FILE tags) but remove
+                // the directives that are only useful for the model's next planning step.
+                let display_output = {
+                    let mut sanitized = display_output;
+                    // Strip VISUAL_QA links and surrounding instructions
+                    if let Some(vqa_start) = sanitized.find("[VISUAL_QA]") {
+                        // Find the end of the VISUAL_QA instruction block
+                        // (ends at the [ATTACH_FILE] line or end of string)
+                        if let Some(attach_pos) = sanitized[vqa_start..].find("[ATTACH_FILE]") {
+                            // Keep the ATTACH_FILE tag, strip everything between VISUAL_QA start and ATTACH_FILE
+                            let before = sanitized[..vqa_start].trim_end().to_string();
+                            let after = sanitized[vqa_start + attach_pos..].to_string();
+                            sanitized = format!("{}\n{}", before, after);
+                        } else {
+                            // No ATTACH_FILE found, just strip from VISUAL_QA to end
+                            sanitized = sanitized[..vqa_start].trim_end().to_string();
+                        }
+                    }
+                    // Strip standalone "IMPORTANT: Look at the preview..." directives
+                    // and "Once satisfied, include this EXACT tag" instructions
+                    let lines: Vec<&str> = sanitized.lines().collect();
+                    let filtered: Vec<&str> = lines.into_iter().filter(|line| {
+                        let trimmed = line.trim();
+                        !trimmed.starts_with("IMPORTANT: Look at the preview")
+                            && !trimmed.starts_with("Once satisfied, include this EXACT tag")
+                            && !trimmed.starts_with("If anything looks wrong, use edit_section")
+                    }).collect();
+                    filtered.join("\n")
+                };
+
                 context_from_agent.push_str(&format!("Turn {} - Task {}: {:?}\nOutput: {}\n\n", current_turn, res.task_id, res.status, display_output));
             }
             completed_tools.extend(task_meta);

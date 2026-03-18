@@ -187,7 +187,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut mock_provider = MockProvider::new();
-        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("Mock".to_string()));
+        mock_provider.expect_generate().returning(|_, _, _, _, _, _| Ok("Mock".to_string()));
         let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
         
         let res = execute_outreach(
@@ -219,7 +219,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut mock_provider = MockProvider::new();
-        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("Mock".to_string()));
+        mock_provider.expect_generate().returning(|_, _, _, _, _, _| Ok("Mock".to_string()));
         let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
         
         let res = execute_outreach(
@@ -252,7 +252,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut mock_provider = MockProvider::new();
-        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("Mock".to_string()));
+        mock_provider.expect_generate().returning(|_, _, _, _, _, _| Ok("Mock".to_string()));
         let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
         
         let res = execute_outreach(
@@ -275,7 +275,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut mock_provider = MockProvider::new();
-        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("Mock".to_string()));
+        mock_provider.expect_generate().returning(|_, _, _, _, _, _| Ok("Mock".to_string()));
         let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
         
         // Mute the user first
@@ -309,7 +309,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut mock_provider = MockProvider::new();
-        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("YES".to_string()));
+        mock_provider.expect_generate().returning(|_, _, _, _, _, _| Ok("YES".to_string()));
         let gate = Arc::new(OutreachGate::new(dir.to_str().unwrap(), Arc::new(mock_provider)));
         let inbox = Arc::new(InboxManager::new(dir.to_str().unwrap()));
         

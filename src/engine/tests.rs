@@ -10,7 +10,7 @@
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|_, _, _, _, _| Ok("Success".to_string()));
+            .returning(|_, _, _, _, _, _| Ok("Success".to_string()));
 
         let engine = EngineBuilder::new()
             .with_platform(Box::new(DummyPlatform))
@@ -59,7 +59,7 @@
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|_sys, _hist, req, _ctx, _tx| {
+            .returning(|_sys, _hist, req, _ctx, _tx, _| {
                 Ok(format!("Mock response to: {}", req.content))
             });
 
@@ -103,7 +103,7 @@
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|_, _, _, _, _| Err(crate::providers::ProviderError::ConnectionError("Boom".to_string())));
+            .returning(|_, _, _, _, _, _| Err(crate::providers::ProviderError::ConnectionError("Boom".to_string())));
 
         let engine = EngineBuilder::new()
             .with_platform(Box::new(DummyPlatform))
@@ -146,7 +146,7 @@
         }
 
         let mut mock_provider = MockProvider::new();
-        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("reply".to_string()));
+        mock_provider.expect_generate().returning(|_, _, _, _, _, _| Ok("reply".to_string()));
 
         let engine = EngineBuilder::new()
             .with_platform(Box::new(FailingPlatform))
@@ -175,7 +175,7 @@
         use tokio::time::{sleep, Duration};
         
         let mut mock_provider = MockProvider::new();
-        mock_provider.expect_generate().returning(|_, _, _, _, _| Ok("reply".to_string()));
+        mock_provider.expect_generate().returning(|_, _, _, _, _, _| Ok("reply".to_string()));
 
         let engine = EngineBuilder::new()
             .with_platform(Box::new(DummyPlatform))
@@ -215,7 +215,7 @@
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|_sys, _hist, _req, _ctx, tx_opt| {
+            .returning(|_sys, _hist, _req, _ctx, tx_opt, _| {
                 if let Some(tx) = tx_opt {
                     let tx_clone = tx.clone();
                     tokio::spawn(async move {
@@ -268,7 +268,7 @@
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|_sys, _hist, _req, _ctx, tx_opt| {
+            .returning(|_sys, _hist, _req, _ctx, tx_opt, _| {
                 // Send a token, then keep the channel open long enough for debounce to fire
                 if let Some(tx) = tx_opt {
                     let tx_clone = tx.clone();
@@ -405,7 +405,7 @@ string ending with an unescaped quote \" and an emoji 😊.",
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(move |_, _, event, _ctx, _| {
+            .returning(move |_, _, event, _ctx, _, _| {
                 if event.author_name == "Audit" {
                     let count = call_count_ptr.fetch_add(1, Ordering::SeqCst);
                     if count == 0 {
@@ -452,7 +452,7 @@ string ending with an unescaped quote \" and an emoji 😊.",
         let pass_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         mock_provider
             .expect_generate()
-            .returning(move |_sys, _, _, _ctx, _| {
+            .returning(move |_sys, _, _, _ctx, _, _| {
                 let pass = pass_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if pass == 0 {
                     // 1. Planner pass: Return a valid AgentPlan JSON
@@ -520,7 +520,7 @@ string ending with an unescaped quote \" and an emoji 😊.",
         let pass_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         mock_provider
             .expect_generate()
-            .returning(move |sys, _, _, _ctx, _| {
+            .returning(move |sys, _, _, _ctx, _, _| {
                 let pass = pass_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if sys.contains("Agent Queen Planner") && pass == 0 {
                     // Provider fails entirely during the planning phase
@@ -687,7 +687,7 @@ string ending with an unescaped quote \" and an emoji 😊.",
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|_, _, _, _, _| {
+            .returning(|_, _, _, _, _, _| {
                 // Endlessly output valid JSON tools, but never 'reply_to_request'
                 Ok(r#"{"tasks": [{"task_id": "1", "tool_type": "researcher", "description": "", "depends_on": []}]}"#.to_string())
             });
@@ -733,7 +733,7 @@ string ending with an unescaped quote \" and an emoji 😊.",
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(|sys, _, _, _, _| {
+            .returning(|sys, _, _, _, _, _| {
                 // If it's the Planner phase (not the prompt builder initialization, but the active loop)
                 // Just fail the main generation outright
                 if sys.contains("INTERNAL ACTION") {
@@ -780,7 +780,7 @@ string ending with an unescaped quote \" and an emoji 😊.",
         let mut mock_provider = MockProvider::new();
         mock_provider
             .expect_generate()
-            .returning(move |sys, _, _, _, _| {
+            .returning(move |sys, _, _, _, _, _| {
                 // Identify the observer prompt natively. Usually contains "SKEPTIC" or "OBSERVER"
                 if !sys.contains("AVAILABLE TOOLS") {
                     // This is the observer evaluating the reply

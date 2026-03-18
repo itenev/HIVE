@@ -33,19 +33,19 @@ The following prompt is designed to push the HIVE Agent stack to its absolute li
 > 21. Use `run_bash_command` to cat `gauntlet_admin.txt`, verifying your host access.
 > 22. Use `process_manager` with `action:[list]` to find your daemon PID, then use `action:[read]` to read its logs, then `action:[kill]` to terminate it.
 > 
-> **Turn 6: Download, Multi-Format Output, Image Pipeline & Synthesis**
+> 
+> **Turn 6: Download, Multi-Format Output & Synthesis**
 > 23. Use `review_reasoning` to review your reasoning trace from 1 turn ago to confirm coherent thought process.
 > 24. Use `list_cached_images` to list all available cached images.
 > 25. Use `file_writer` to compose a cyberpunk-themed PDF WITH an image: `action:[compose] id:[report] title:[Master Gauntlet v3] theme:[cyberpunk] content:[# Success across all turns.\n\n![Gauntlet Image](/absolute/path/from/step24)\n\nAll systems verified.]`. Use an actual absolute path from the cached images list in step 24.
 > 26. Use `file_writer` to render the same report as markdown: `action:[render] id:[report] format:[md]` to verify multi-format output works.
 > 27. Use `download` to download a test file: `url:[https://httpbin.org/json]` to verify the download tool and file server.
-> 28. Use `generate_image` to generate a new test image with prompt "golden honeycomb pattern" to verify image generation works.
-> 29. Use `synthesizer` to fan-in all observations, parse the results, and generate the final response.
+> 28. Use `synthesizer` to fan-in all observations, parse the results, and generate the final response.
 > 
 > **Turn 7 repeated: Final Delivery**
 > 30. Use `reply_to_request` to end the gauntlet. Your final response MUST end with the following formatted report card. For each tool, write PASS if it executed successfully or FAIL with a reason:
 > 
-> **Master Gauntlet v3 — Report Card**
+> **Master Gauntlet v4 — Report Card**
 > - 🌐 `web_search`: PASS / FAIL
 > - 🔬 `researcher`: PASS / FAIL
 > - 📂 `codebase_list`: PASS / FAIL
@@ -62,17 +62,17 @@ The following prompt is designed to push the HIVE Agent stack to its absolute li
 > - 🧠 `review_reasoning`: PASS / FAIL
 > - 📎 `read_attachment`: PASS / FAIL
 > - 🏃 `autonomy_activity`: PASS / FAIL
+> - 🖼️ `list_cached_images`: PASS / FAIL
 > - ✍️ `file_writer` (PDF): PASS / FAIL
 > - ✍️ `file_writer` (PDF + Image): PASS / FAIL
 > - ✍️ `file_writer` (multi-format): PASS / FAIL
-> - 🖼️ `list_cached_images`: PASS / FAIL
-> - 🎨 `generate_image`: PASS / FAIL
 > - ⬇️ `download`: PASS / FAIL (or ADMIN)
 > - 👾 `process_manager`: PASS / FAIL (or ADMIN)
 > - 💻 `file_system_operator`: PASS / FAIL (or ADMIN)
 > - ⌨️ `run_bash_command`: PASS / FAIL (or ADMIN)
 > - 🪄 `synthesizer`: PASS / FAIL
 > 
-> **TOTAL: XX / 25 PASSED**
+> **TOTAL: XX / 24 PASSED**
 > 
 > Do not use prior knowledge for any of this. Execute them in parallel per turn, wait for observations, and prove your capabilities.
+

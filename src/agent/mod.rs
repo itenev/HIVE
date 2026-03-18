@@ -34,6 +34,10 @@ pub mod attachment_tool;
 pub mod log_tool;
 pub mod download_tool;
 pub mod moderation_tool;
+pub mod sub_agent;
+pub mod spawner;
+pub mod aggregator;
+pub mod lifecycle;
 pub struct AgentManager {
     registry: HashMap<String, ToolTemplate>,
     discord_tools: HashMap<String, ToolTemplate>,
@@ -105,7 +109,7 @@ impl AgentManager {
         };
 
         let manage_lessons = ToolTemplate { name: "manage_lessons".into(), system_prompt: "Manage important behavioral or factual lessons. 'action:[store] lesson:[text] keywords:[comma separated] confidence:[0.0-1.0]' — write a lesson. 'action:[read]' — list all lessons scoped here. 'action:[search] query:[text]' — filter lessons.".into(), tools: vec![] };
-        let search_timeline = ToolTemplate { name: "search_timeline".into(), system_prompt: "Deep search the infinite long-term episodic memory logs. Three modes: 'action:[recent] limit:[N]' — read the N most recent entries (no query needed). 'action:[search] query:[text] limit:[N]' — word-by-word search (matches ANY word). 'action:[exact] query:[text] limit:[N]' — exact phrase substring search. Scoping: add 'scope:[channel]' for all users in current channel, 'scope:[all_public]' for all channels.".into(), tools: vec![] };
+        let search_timeline = ToolTemplate { name: "search_timeline".into(), system_prompt: "PRIMARY TOOL for recalling past conversations, what users said, and episodic history. Use this FIRST when users ask about conversation history, past interactions, or 'what do you know about me'. Deep search the infinite long-term episodic memory logs. Three modes: 'action:[recent] limit:[N]' — read the N most recent entries (no query needed, default 50). 'action:[search] query:[text] limit:[N]' — word-by-word search (matches ANY word). 'action:[exact] query:[text] limit:[N]' — exact phrase substring search. Scoping: add 'scope:[channel]' for all users in current channel, 'scope:[all_public]' for all channels.".into(), tools: vec![] };
         let manage_scratchpad = ToolTemplate { name: "manage_scratchpad".into(), system_prompt: "Persistent VRAM for notes/variables scoped to this chat. 'action:[read]' — view the scratchpad. 'action:[write] content:[...]' — overwrite entirely. 'action:[append] content:[...]' — add to end. 'action:[clear]' — wipe.".into(), tools: vec![] };
         let operate_synaptic_graph = ToolTemplate { name: "operate_synaptic_graph".into(), system_prompt: "Local Knowledge Graph for core truths and relationships. Actions: 'action:[store] concept:[A] data:[B]' — store a fact about a concept. 'action:[search] concept:[A]' — retrieve all facts about a concept (fuzzy match). 'action:[beliefs]' — list the concepts you know the most about. 'action:[relate] from:[A] relation:[is_a] to:[B]' — store a relationship between two concepts. 'action:[stats]' — get node/edge counts.".into(), tools: vec![] };
         let read_core_memory = ToolTemplate { name: "read_core_memory".into(), system_prompt: "System introspection. 'action:[temporal]' — check boot time, total uptime, turn counts. 'action:[tokens]' — check working memory context size / token pressure limit.".into(), tools: vec![] };
@@ -117,11 +121,18 @@ impl AgentManager {
         let operate_turing_grid = ToolTemplate {
             name: "operate_turing_grid".into(),
             system_prompt: "The 3D Turing Grid is a massive arbitrary personal computation device. \
-                'action:[read]' - read current cell. \
-                'action:[write] format:[text|json|rust|python|node|ruby|swift|applescript] content:[data]' - over/write cell. \
+                'action:[read]' - read current cell (shows links + history info). \
+                'action:[write] format:[text|json|rust|python|node|ruby|swift|applescript] content:[data]' - over/write cell (auto-versions previous content). \
                 'action:[move] dx:[X] dy:[Y] dz:[Z]' - safely move the R/W head relative to current. \
                 'action:[scan] radius:[R]' - radar search surrounding cells for data. \
-                'action:[execute]' - route the current cell to the internal ALU kernel.".into(),
+                'action:[execute]' - route the current cell to the internal ALU kernel. \
+                'action:[index]' - view the full manifest (table of contents) of all cells, labels, and links. Use this to navigate. \
+                'action:[label] name:[my_label]' - bookmark the current cursor position with a name. \
+                'action:[goto] name:[my_label]' - jump the cursor directly to a labeled position. \
+                'action:[link] target_x:[X] target_y:[Y] target_z:[Z]' - create a directional link from current cell to target coords. \
+                'action:[history]' - view the version history stack (up to 3) for the current cell. \
+                'action:[undo]' - restore the current cell to its previous version. \
+                'action:[pipeline] cells:[(0,0,0),(1,0,0),(2,0,0)]' - execute multiple cells sequentially, piping stdout between them.".into(),
             tools: vec![],
         };
         let generate_image = ToolTemplate {
@@ -390,7 +401,15 @@ impl AgentManager {
     /// Executes a agent plan by spawning all tasks concurrently.
     /// In a fully robust graph, we would respect `depends_on`. For now, we fan out in parallel.
     #[cfg(not(tarpaulin_include))]
-    pub async fn execute_plan(&self, plan: crate::agent::planner::AgentPlan, context: &str, scope: crate::models::scope::Scope, telemetry_tx: Option<tokio::sync::mpsc::Sender<String>>) -> Vec<ToolResult> {
+    pub async fn execute_plan(
+        &self,
+        plan: crate::agent::planner::AgentPlan,
+        context: &str,
+        scope: crate::models::scope::Scope,
+        telemetry_tx: Option<tokio::sync::mpsc::Sender<String>>,
+        swarm_agent: Option<Arc<AgentManager>>,
+        swarm_caps: Option<Arc<crate::models::capabilities::AgentCapabilities>>,
+    ) -> Vec<ToolResult> {
         let mut futures = vec![];
 
         for task in plan.tasks {
@@ -405,6 +424,8 @@ impl AgentManager {
                 self.inbox.clone(),
                 self.drives.clone(),
                 Some(self.composer.clone()),
+                swarm_agent.clone(),
+                swarm_caps.clone(),
             ) {
                 futures.push(handle);
                 continue;
