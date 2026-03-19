@@ -30,10 +30,14 @@ async fn load_recent_autonomy_sessions(max_entries: usize) -> String {
         return String::new();
     }
 
+    let total_sessions = entries.len();
     let start = if entries.len() > max_entries { entries.len() - max_entries } else { 0 };
     let recent = &entries[start..];
 
-    let mut dedup_block = String::from("\n🚫 **PREVIOUS AUTONOMY SESSIONS — DO NOT REPEAT THESE:**\n");
+    let mut dedup_block = format!(
+        "\n🚫 **PREVIOUS AUTONOMY SESSIONS — DO NOT REPEAT THESE ({} total sessions completed so far):**\n",
+        total_sessions
+    );
     dedup_block.push_str("You have ALREADY done the following in recent sessions. Do NOT do the same things again. Explore NEW territory.\n\n");
 
     for (i, line) in recent.iter().enumerate() {
@@ -42,9 +46,12 @@ async fn load_recent_autonomy_sessions(max_entries: usize) -> String {
             let tools = entry.get("tools_used").and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join(", "))
                 .unwrap_or_default();
-            // Truncate summary to first 200 chars to keep context lean
-            let short_summary: String = summary.chars().take(200).collect();
-            dedup_block.push_str(&format!("Session {}: [Tools: {}] {}...\n", i + 1, tools, short_summary));
+            // Include enough of the summary for the agent to know what was actually done
+            let short_summary: String = summary.chars().take(5000).collect();
+            dedup_block.push_str(&format!(
+                "--- Session {} ---\nTOOLS ALREADY USED: {}\n{}\n\n",
+                i + 1, tools, short_summary
+            ));
         }
     }
 
@@ -634,7 +641,7 @@ impl Engine {
                             tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
                             tracing::info!("[AUTONOMY] 🐝 5-minute idle timer fired. Entering Continuous Autonomy mode.");
                             let public_narrative = memory_clone.get_public_narrative().await;
-                            let previous_sessions = load_recent_autonomy_sessions(5).await;
+                            let previous_sessions = load_recent_autonomy_sessions(10).await;
                             let autonomy_event = Event {
                                 platform: "discord:1480192647657427044:0:0".to_string(),
                                 scope: Scope::Public {
@@ -767,7 +774,7 @@ impl Engine {
                                 tracing::info!("[AUTONOMY] 🐝 5-minute idle timer fired. Entering Continuous Autonomy mode.");
                                 
                                 let public_narrative = memory_clone.get_public_narrative().await;
-                                let previous_sessions = load_recent_autonomy_sessions(5).await;
+                                let previous_sessions = load_recent_autonomy_sessions(10).await;
                                 
                                 let autonomy_event = Event {
                                     platform: "discord:1480192647657427044:0:0".to_string(),
