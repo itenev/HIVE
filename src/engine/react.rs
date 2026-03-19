@@ -61,6 +61,7 @@ pub async fn execute_react_loop(
     let mut all_rejections: Vec<(String, String, String)> = vec![];
     let mut completed_tools: Vec<(String, String)> = vec![]; // (task_id, tool_type)
     let mut tool_outputs: HashMap<String, String> = HashMap::new(); // task_id -> raw output for source forwarding
+    let mut last_tool_turn_ids: Vec<(String, String)> = vec![]; // (task_id, tool_type) from the MOST RECENT tool-executing turn only
     let mut consecutive_json_failures: u8 = 0;
 
     // The inner ReAct loop
@@ -359,6 +360,8 @@ pub async fn execute_react_loop(
 
                 context_from_agent.push_str(&format!("Turn {} - Task {}: {:?}\nOutput: {}\n\n", current_turn, res.task_id, res.status, display_output));
             }
+            // Track which tools ran on this turn for the attachment safety net
+            last_tool_turn_ids = task_meta.clone();
             completed_tools.extend(task_meta);
 
             // ─── TELEMETRY: Send tool completion status ─────────────────
@@ -502,25 +505,24 @@ pub async fn execute_react_loop(
     // 🛡️ ATTACHMENT SAFETY NET: Auto-append any ATTACH tags from tool outputs
     // that the LLM forgot to include in its final reply.
     //
-    // CRITICAL: Only scan outputs from actual file-producing tools, NOT the
-    // full accumulated context_from_agent string. The context accumulates ALL
-    // tool outputs across ALL turns — including tools like autonomy_activity
-    // that may echo old [ATTACH_FILE] tags from prior sessions. Scanning the
-    // full context causes stale/irrelevant files to be attached to unrelated
-    // replies.
+    // SCOPING RULES (to prevent stale file spam):
+    // 1. Only scan tools from the LAST tool-executing turn (not all accumulated tools)
+    // 2. Only scan file-producing tool types (file_writer, download, generate_image, tts)
+    // This ensures files from earlier turns or non-file tools never bleed into the reply.
     {
         let tag_patterns = ["[ATTACH_FILE]", "[ATTACH_IMAGE]", "[ATTACH_AUDIO]"];
         let file_producing_tools = ["file_writer", "download", "generate_image", "tts"];
         let mut missing_tags = Vec::new();
 
-        // Only scan outputs from file-producing tools in this session
-        for (task_id, output) in &tool_outputs {
-            let is_file_tool = completed_tools.iter().any(|(tid, ttype)| {
-                tid == task_id && file_producing_tools.contains(&ttype.as_str())
-            });
-            if !is_file_tool {
+        // Only consider tools from the MOST RECENT tool-executing turn
+        for (task_id, tool_type) in &last_tool_turn_ids {
+            if !file_producing_tools.contains(&tool_type.as_str()) {
                 continue;
             }
+            let output = match tool_outputs.get(task_id) {
+                Some(o) => o,
+                None => continue,
+            };
 
             for pattern in &tag_patterns {
                 let mut search_from = 0;
@@ -540,7 +542,7 @@ pub async fn execute_react_loop(
         }
 
         if !missing_tags.is_empty() {
-            tracing::warn!("[SAFETY NET] 🛡️ Auto-appending {} missing attachment tag(s) from file-producing tools.", missing_tags.len());
+            tracing::warn!("[SAFETY NET] 🛡️ Auto-appending {} missing attachment tag(s) from last turn's file-producing tools.", missing_tags.len());
             for tag in &missing_tags {
                 final_response_text.push_str(&format!("\n\n{}", tag));
             }
