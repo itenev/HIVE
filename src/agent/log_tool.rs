@@ -24,11 +24,10 @@ pub async fn execute_read_logs(
         if let Ok(mut entries) = tokio::fs::read_dir("logs").await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("hive.") && name.ends_with(".log") && name != "hive.log" {
-                    if latest.as_ref().map_or(true, |(prev, _)| name > *prev) {
+                if name.starts_with("hive.") && name.ends_with(".log") && name != "hive.log"
+                    && latest.as_ref().is_none_or(|(prev, _)| name > *prev) {
                         latest = Some((name, entry.path()));
                     }
-                }
             }
         }
         latest.map(|(_, p)| p).unwrap_or_else(|| std::path::PathBuf::from("logs/hive.log"))

@@ -6,7 +6,6 @@
 ///
 /// No external database required — all state is persisted as JSON Lines  
 /// under `memory/synaptic/`.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -75,8 +74,8 @@ impl Neo4jGraph {
         if let Some(ref dir) = self.dir {
             // Load nodes
             let nodes_path = dir.join("nodes.jsonl");
-            if nodes_path.exists() {
-                if let Ok(content) = tokio::fs::read_to_string(&nodes_path).await {
+            if nodes_path.exists()
+                && let Ok(content) = tokio::fs::read_to_string(&nodes_path).await {
                     let mut map = self.nodes.write().await;
                     for line in content.lines() {
                         if let Ok(node) = serde_json::from_str::<SynapticNode>(line) {
@@ -85,12 +84,11 @@ impl Neo4jGraph {
                     }
                     tracing::info!("[SYNAPTIC] Loaded {} nodes from disk.", map.len());
                 }
-            }
 
             // Load edges
             let edges_path = dir.join("edges.jsonl");
-            if edges_path.exists() {
-                if let Ok(content) = tokio::fs::read_to_string(&edges_path).await {
+            if edges_path.exists()
+                && let Ok(content) = tokio::fs::read_to_string(&edges_path).await {
                     let mut edges = self.edges.write().await;
                     for line in content.lines() {
                         if let Ok(edge) = serde_json::from_str::<SynapticEdge>(line) {
@@ -99,7 +97,6 @@ impl Neo4jGraph {
                     }
                     tracing::info!("[SYNAPTIC] Loaded {} edges from disk.", edges.len());
                 }
-            }
         }
     }
 

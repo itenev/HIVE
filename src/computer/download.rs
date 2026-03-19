@@ -39,13 +39,12 @@ pub async fn download_file(url: &str, target_dir: &Path) -> std::io::Result<Path
     }
 
     // Check content-length if available (50GB limit)
-    if let Some(cl) = response.content_length() {
-        if cl > 50_000 * 1024 * 1024 { // 50GB
+    if let Some(cl) = response.content_length()
+        && cl > 50_000 * 1024 * 1024 { // 50GB
             return Err(std::io::Error::other(format!(
                 "File too large: {} bytes (max 50GB)", cl
             )));
         }
-    }
 
     // Extract filename from Content-Disposition or URL path
     let filename = extract_filename(&response, url);
@@ -71,28 +70,23 @@ pub async fn download_file(url: &str, target_dir: &Path) -> std::io::Result<Path
 /// Extracts a filename from the response headers or falls back to the URL path.
 fn extract_filename(response: &reqwest::Response, url: &str) -> String {
     // Try Content-Disposition header first
-    if let Some(cd) = response.headers().get("content-disposition") {
-        if let Ok(cd_str) = cd.to_str() {
-            if let Some(start) = cd_str.find("filename=") {
+    if let Some(cd) = response.headers().get("content-disposition")
+        && let Ok(cd_str) = cd.to_str()
+            && let Some(start) = cd_str.find("filename=") {
                 let name = &cd_str[start + 9..];
                 let name = name.trim_matches('"').trim_matches('\'');
                 if !name.is_empty() {
                     return sanitize_filename(name);
                 }
             }
-        }
-    }
 
     // Fall back to URL path
-    if let Ok(parsed) = url.parse::<reqwest::Url>() {
-        if let Some(segments) = parsed.path_segments() {
-            if let Some(last) = segments.last() {
-                if !last.is_empty() {
+    if let Ok(parsed) = url.parse::<reqwest::Url>()
+        && let Some(mut segments) = parsed.path_segments()
+            && let Some(last) = segments.next_back()
+                && !last.is_empty() {
                     return sanitize_filename(last);
                 }
-            }
-        }
-    }
 
     // Final fallback
     format!("download_{}", chrono::Utc::now().timestamp())

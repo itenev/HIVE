@@ -19,20 +19,16 @@ pub async fn execute_review_reasoning(
 
     // Parse parameters
     let mut limit: usize = 5;
-    if let Some(turns_str) = desc.split("turns_ago:[").nth(1) {
-        if let Some(num_str) = turns_str.split("]").next() {
-            if let Ok(num) = num_str.parse::<usize>() {
+    if let Some(turns_str) = desc.split("turns_ago:[").nth(1)
+        && let Some(num_str) = turns_str.split("]").next()
+            && let Ok(num) = num_str.parse::<usize>() {
                 limit = num;
             }
-        }
-    }
-    if let Some(limit_str) = desc.split("limit:[").nth(1) {
-        if let Some(num_str) = limit_str.split("]").next() {
-            if let Ok(num) = num_str.parse::<usize>() {
+    if let Some(limit_str) = desc.split("limit:[").nth(1)
+        && let Some(num_str) = limit_str.split("]").next()
+            && let Ok(num) = num_str.parse::<usize>() {
                 limit = num;
             }
-        }
-    }
 
     // Resolve the timeline file path from the current scope
     let timeline_path = match &scope {
@@ -62,13 +58,11 @@ pub async fn execute_review_reasoning(
     let mut all_traces = Vec::new();
 
     while let Ok(Some(line)) = lines.next_line().await {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-            if json["author_id"].as_str() == Some("internal") {
-                if let Some(content) = json["content"].as_str() {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
+            && json["author_id"].as_str() == Some("internal")
+                && let Some(content) = json["content"].as_str() {
                     all_traces.push(content.to_string());
                 }
-            }
-        }
     }
 
     if all_traces.is_empty() {

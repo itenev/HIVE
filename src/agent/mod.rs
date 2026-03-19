@@ -406,10 +406,10 @@ impl AgentManager {
         // Synchronous load from the forge's data (already loaded from disk)
         let tools_dir = &forge.tools_dir;
         let registry_path = tools_dir.join("registry.json");
-        if registry_path.exists() {
-            if let Ok(raw) = std::fs::read_to_string(&registry_path) {
-                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&raw) {
-                    if let Some(tools) = data.get("tools").and_then(|t| t.as_array()) {
+        if registry_path.exists()
+            && let Ok(raw) = std::fs::read_to_string(&registry_path)
+                && let Ok(data) = serde_json::from_str::<serde_json::Value>(&raw)
+                    && let Some(tools) = data.get("tools").and_then(|t| t.as_array()) {
                         for tool_val in tools {
                             let enabled = tool_val.get("enabled").and_then(|e| e.as_bool()).unwrap_or(false);
                             if !enabled { continue; }
@@ -425,9 +425,6 @@ impl AgentManager {
                             tracing::info!("[FORGE] Hot-loaded forged tool: {}", name);
                         }
                     }
-                }
-            }
-        }
     }
 
     pub fn register_tool(&mut self, template: ToolTemplate) {

@@ -114,7 +114,7 @@ pub async fn execute_file_writer(
                     .await;
                 let _ = tx.send("typing_indicator".into()).await;
             }
-            if format == "pdf" || format == "" {
+            if format == "pdf" || format.is_empty() {
                 match composer.render_pdf(&doc_id).await {
                     Ok((pdf_path, png_preview)) => {
                         if let Some(tx) = &telemetry_tx {
@@ -200,7 +200,7 @@ pub async fn execute_file_writer(
             }
             let _ = composer.add_section(&doc_id, "", &content).await;
             
-            if format == "pdf" || format == "" {
+            if format == "pdf" || format.is_empty() {
                 match composer.render_pdf(&doc_id).await {
                     Ok((pdf_path, png_preview)) => {
                         if let Some(tx) = &telemetry_tx {

@@ -161,10 +161,10 @@ pub async fn execute_list_cached_images(
 
     while let Ok(Some(entry)) = dir.next_entry().await {
         let path = entry.path();
-        if path.is_file() {
-            if let Ok(metadata) = entry.metadata().await {
-                if let Ok(modified) = metadata.modified() {
-                    if let Ok(age) = now.duration_since(modified) {
+        if path.is_file()
+            && let Ok(metadata) = entry.metadata().await
+                && let Ok(modified) = metadata.modified()
+                    && let Ok(age) = now.duration_since(modified) {
                         if age > twenty_four_hours {
                             // File is older than 24 hours, delete it
                             if tokio::fs::remove_file(&path).await.is_ok() {
@@ -176,16 +176,12 @@ pub async fn execute_list_cached_images(
                             valid_images.push(format!("- {} ({:.1} hours old)", path.display(), hours_old));
                         }
                     }
-                }
-            }
-        }
     }
 
-    if let Some(tx) = &telemetry_tx {
-        if deleted_count > 0 {
+    if let Some(tx) = &telemetry_tx
+        && deleted_count > 0 {
             let _ = tx.send(format!("🧹 Image Cache: Purged {} expired images (>24h).\n", deleted_count)).await;
         }
-    }
 
     let output = if valid_images.is_empty() {
         "Image cache is currently empty.".to_string()

@@ -368,7 +368,7 @@ impl Engine {
         tracing::info!("[ENGINE] 🐝 Parallel mode: max {} concurrent ReAct loops (HIVE_MAX_PARALLEL)", max_parallel);
 
         if !platform_providers.is_empty() {
-            for (name, _) in &platform_providers {
+            for name in platform_providers.keys() {
                 tracing::info!("[ENGINE] 🎯 Platform-specific provider registered for '{}'", name);
             }
         }
@@ -835,10 +835,10 @@ impl Engine {
                                         You MUST NOT speak to users, you MUST NOT write conversational stories about them, and you MUST NOT address anyone directly. \
                                         This is your private internal monologue. \
                                         \n\n\
-                                        Use this time productively. Consider the public engagement narrative above and diversify your autonomous work. \
-                                        You MUST NOT repeat what you did in previous sessions listed above. Branch out. Be creative. Explore new ground. \
-                                        Ideas: review your memory, consolidate lessons, practice skills, explore your Turing Grid, run routines, \
-                                        do research, audit system logs, scan for bugs, or anything you find valuable for self-improvement. \
+                                        This is your free, unsupervised time to enact any self-determined behavior. \
+                                        The information above is a log of your activities in public outside of autonomy. \
+                                        You MUST NOT repeat what you did in previous sessions listed above. \
+                                        You have complete freedom to choose your actions from your available tools. \
                                         Report your internal monologue and actions in your final reply.",
                                         public_narrative,
                                         previous_sessions

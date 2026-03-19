@@ -52,7 +52,7 @@ pub async fn run_app() {
     // Dynamic verbosity via RUST_LOG env var (default: info globally and for HIVE)
     // The user requested cleaner logs, so we drop debug chunk telemetry from the CLI console natively.
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,HIVE=info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,HIVE=info"));
 
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
@@ -162,16 +162,15 @@ pub async fn run_app() {
                                     tracing::debug!("[TUNNEL] {}", line);
                                 }
                                 // Capture the public URL (e.g. https://xxx.trycloudflare.com)
-                                if line.contains("trycloudflare.com") {
-                                    if let Some(url) = line.split_whitespace()
+                                if line.contains("trycloudflare.com")
+                                    && let Some(url) = line.split_whitespace()
                                         .find(|s| s.starts_with("https://") && s.contains("trycloudflare.com"))
                                     {
-                                        let url = url.trim_end_matches(|c: char| c == '|' || c == ' ');
+                                        let url = url.trim_end_matches(['|', ' ']);
                                         let _ = tokio::fs::create_dir_all("memory/core").await;
                                         let _ = tokio::fs::write("memory/core/tunnel_url.txt", url).await;
                                         tracing::info!("[TUNNEL] ✅ Public URL: {}", url);
                                     }
-                                }
                             }
                         }
                         let _ = proc.wait().await;

@@ -271,8 +271,8 @@ impl TuringGrid {
     /// Returns true on success, false if no history available.
     pub async fn undo(&mut self) -> std::io::Result<bool> {
         let key = Self::coord_key(self.cursor.0, self.cursor.1, self.cursor.2);
-        if let Some(cell) = self.cells.get_mut(&key) {
-            if let Some(snapshot) = cell.history.first().cloned() {
+        if let Some(cell) = self.cells.get_mut(&key)
+            && let Some(snapshot) = cell.history.first().cloned() {
                 cell.content = snapshot.content;
                 cell.format = snapshot.format;
                 cell.last_updated = chrono::Utc::now().to_rfc3339();
@@ -280,7 +280,6 @@ impl TuringGrid {
                 self.save().await?;
                 return Ok(true);
             }
-        }
         Ok(false)
     }
 

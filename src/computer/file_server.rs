@@ -119,8 +119,8 @@ async fn handle_connection(
                 else { "📁 Files" };
             if let Ok(mut reader) = fs::read_dir(dir).await {
                 while let Ok(Some(entry)) = reader.next_entry().await {
-                    if let Ok(meta) = entry.metadata().await {
-                        if meta.is_file() {
+                    if let Ok(meta) = entry.metadata().await
+                        && meta.is_file() {
                             let name = entry.file_name().to_string_lossy().to_string();
                             let size = meta.len();
                             total_files += 1;
@@ -144,7 +144,6 @@ async fn handle_connection(
                                 icon, html_esc(&name), size_str, dir_label, html_esc(&name), token_param
                             ));
                         }
-                    }
                 }
             }
         }
@@ -214,8 +213,8 @@ tr:hover{{background:#16213e}}
         // Search all served dirs for the file
         for dir in dirs {
             let file_path = dir.join(&safe_name);
-            if file_path.exists() {
-                if let Ok(data) = fs::read(&file_path).await {
+            if file_path.exists()
+                && let Ok(data) = fs::read(&file_path).await {
                     let content_type = guess_content_type(&safe_name);
                     let resp = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nContent-Disposition: attachment; filename=\"{}\"\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
@@ -225,7 +224,6 @@ tr:hover{{background:#16213e}}
                     stream.write_all(&data).await?;
                     return Ok(());
                 }
-            }
         }
 
         let body = "404 Not Found";

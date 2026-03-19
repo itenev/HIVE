@@ -362,15 +362,14 @@ pub async fn execute_operate_turing_grid(
                     if let Some(close) = remaining[open..].find(')') {
                         let inner = &remaining[open + 1..open + close];
                         let parts: Vec<&str> = inner.split(',').collect();
-                        if parts.len() == 3 {
-                            if let (Ok(x), Ok(y), Ok(z)) = (
+                        if parts.len() == 3
+                            && let (Ok(x), Ok(y), Ok(z)) = (
                                 parts[0].trim().parse::<i32>(),
                                 parts[1].trim().parse::<i32>(),
                                 parts[2].trim().parse::<i32>(),
                             ) {
                                 coords.push((x, y, z));
                             }
-                        }
                         remaining = &remaining[open + close + 1..];
                     } else {
                         break;

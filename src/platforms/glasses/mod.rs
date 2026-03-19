@@ -144,11 +144,10 @@ impl GlassesPlatform {
         }
 
         for param in query.split('&') {
-            if let Some(token) = param.strip_prefix("token=") {
-                if token == expected {
+            if let Some(token) = param.strip_prefix("token=")
+                && token == expected {
                     return Some(("glasses_user".to_string(), "Glasses User".to_string()));
                 }
-            }
         }
         None
     }

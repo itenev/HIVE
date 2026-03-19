@@ -80,15 +80,11 @@ impl GoalNode {
 // ─── Goal Tree ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct GoalTreeData {
     pub nodes: Vec<GoalNode>,
 }
 
-impl Default for GoalTreeData {
-    fn default() -> Self {
-        Self { nodes: vec![] }
-    }
-}
 
 /// Persistent goal tree scoped to a user+location pair.
 pub struct GoalTree {
@@ -327,11 +323,7 @@ impl GoalTree {
                 GoalStatus::Blocked => "🚫",
                 GoalStatus::Pending => "⬜",
             };
-            let progress_str = if child.children.is_empty() {
-                format!(", {:.0}%", child.progress * 100.0)
-            } else {
-                format!(", {:.0}%", child.progress * 100.0)
-            };
+            let progress_str = format!(", {:.0}%", child.progress * 100.0);
             out.push_str(&format!("{}└─ {} {} ({}{})\n", prefix, icon, child.title, 
                 match child.status {
                     GoalStatus::Completed => "DONE",

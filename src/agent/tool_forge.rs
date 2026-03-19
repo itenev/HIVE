@@ -1,3 +1,4 @@
+#![allow(clippy::ptr_arg)]
 use crate::models::tool::{ToolResult, ToolStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,15 +31,11 @@ pub struct ForgedToolDef {
 // ─── Forge Registry ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 struct ForgeRegistryData {
     tools: Vec<ForgedToolDef>,
 }
 
-impl Default for ForgeRegistryData {
-    fn default() -> Self {
-        Self { tools: vec![] }
-    }
-}
 
 pub struct ToolForge {
     data: RwLock<ForgeRegistryData>,
@@ -61,13 +58,11 @@ impl ToolForge {
 
     fn load(tools_dir: &PathBuf) -> ForgeRegistryData {
         let path = Self::registry_path(tools_dir);
-        if path.exists() {
-            if let Ok(raw) = std::fs::read_to_string(&path) {
-                if let Ok(data) = serde_json::from_str::<ForgeRegistryData>(&raw) {
+        if path.exists()
+            && let Ok(raw) = std::fs::read_to_string(&path)
+                && let Ok(data) = serde_json::from_str::<ForgeRegistryData>(&raw) {
                     return data;
                 }
-            }
-        }
         ForgeRegistryData::default()
     }
 

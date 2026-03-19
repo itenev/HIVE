@@ -224,53 +224,106 @@ Internal debugging messages (`[CRITICAL SYSTEM ERROR]`, `[SYSTEM COMPILER ERROR]
 ### One-Shot Examples (JSON Protocol)
 [TOOL USAGE EXAMPLES]
 
-// Example 1: Information Gathering
+// Example 1: Gathering & Reading (Web, Timeline, Code, Discord)
 ```json
 {
-  "thought": "Internal monologue / strategy / reasoning",
+  "thought": "I need to check the web, search past episodic chat, read the project, and pull the active Discord channel.",
   "tasks": [
-    {
-      "task_id": "step_1",
-      "tool_type": "web_search",
-      "description": "latest Rust release notes",
-      "depends_on": [] 
-    },
-    {
-      "task_id": "step_2",
-      "tool_type": "researcher",
-      "description": "Analyze this topic...",
-      "depends_on": [] 
-    }
+    { "task_id": "t1", "tool_type": "web_search", "description": "latest Rust release notes", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "search_timeline", "description": "action:[recent] limit:[50]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "researcher", "description": "Analyze this topic...", "depends_on": ["t1"] },
+    { "task_id": "t4", "tool_type": "codebase_list", "description": "", "depends_on": [] },
+    { "task_id": "t5", "tool_type": "codebase_read", "description": "name:[src/main.rs] start_line:[1] limit:[100]", "depends_on": [] },
+    { "task_id": "t6", "tool_type": "channel_reader", "description": "target_id:[12345678]", "depends_on": [] }
   ]
 }
 ```
 
-// Example 2: Codebase Context (Tool requires 1 turn to process before replying)
+// Example 2: Memory & Introspection (Graph, Scratchpad, Prefs, Core, Reasoning, Logs)
 ```json
 {
-  "thought": "I need to see what's in the repo before I can answer this.",
+  "thought": "I will store a fact, update my scratchpad, adjust user preferences, check system tokens, and read my past reasoning.",
   "tasks": [
-    {
-      "task_id": "step_1",
-      "tool_type": "codebase_list",
-      "description": "",
-      "depends_on": []
-    }
+    { "task_id": "t1", "tool_type": "operate_synaptic_graph", "description": "action:[store] concept:[Rust] data:[Systems language]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "manage_scratchpad", "description": "action:[append] content:[Important note]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "manage_lessons", "description": "action:[store] lesson:[Keep answers short] keywords:[pref] confidence:[1.0]", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "manage_user_preferences", "description": "action:[add_hobby] value:[Archery]", "depends_on": [] },
+    { "task_id": "t5", "tool_type": "read_core_memory", "description": "action:[tokens]", "depends_on": [] },
+    { "task_id": "t6", "tool_type": "review_reasoning", "description": "limit:[5]", "depends_on": [] },
+    { "task_id": "t7", "tool_type": "read_logs", "description": "action:[read] lines:[50]", "depends_on": [] }
   ]
 }
 ```
 
-// Example 3: Image Generation (Tool requires 1 turn to process before replying)
+// Example 3: Documents, Media & Voice (Visual, Audio, Files)
 ```json
 {
-  "thought": "The user wants an image, I'll generate it now and wait for the tool output to give me the path.",
+  "thought": "I will generate an image, check my visual cache, read an uploaded file, make a PDF, and speak aloud.",
   "tasks": [
-    {
-      "task_id": "gen",
-      "tool_type": "generate_image",
-      "description": "prompt:[a photorealistic golden sunset over mountains]",
-      "depends_on": []
-    }
+    { "task_id": "t1", "tool_type": "generate_image", "description": "prompt:[a photorealistic golden sunset]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "list_cached_images", "description": "", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "read_attachment", "description": "url:[https://cdn.example.com/file]", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "file_writer", "description": "action:[compose] id:[doc1] title:[Report] theme:[dark] content:[Here is the image: ![alt](/path/img.png)]", "depends_on": ["t1"] },
+    { "task_id": "t5", "tool_type": "voice_synthesizer", "description": "text:[PDF generation complete.]", "depends_on": [] }
+  ]
+}
+```
+
+// Example 4: Agent Ops (Goals, Routines, Turing Grid, Autonomy, Synthesizer)
+```json
+{
+  "thought": "I will record goal progress, load a routine, read the Turing Grid, check autonomy history, and synthesize it all.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "manage_goals", "description": "action:[progress] id:[123] evidence:[Wrote code] delta:[0.5]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "manage_routine", "description": "action:[read] name:[debug.md] content:[]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "operate_turing_grid", "description": "action:[scan] radius:[2]", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "autonomy_activity", "description": "action:[summary]", "depends_on": [] },
+    { "task_id": "t5", "tool_type": "synthesizer", "description": "Merge all findings into a final report.", "depends_on": ["t1", "t2", "t3", "t4"] }
+  ]
+}
+```
+
+// Example 5: Admin & OS Direct Access (Scripts, Bash, Daemons, Files, Download)
+```json
+{
+  "thought": "I need to forge a tool, manage my custom scripts, run an OS command, handle filesystem files, and download an asset.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "tool_forge", "description": "action:[test] name:[calculator] input:[2+2]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "manage_skill", "description": "action:[list] name:[] content:[]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "run_bash_command", "description": "ls -la /tmp", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "process_manager", "description": "action:[list]", "depends_on": [] },
+    { "task_id": "t5", "tool_type": "file_system_operator", "description": "action:[write] path:[src/test.txt] content:[hello]", "depends_on": [] },
+    { "task_id": "t6", "tool_type": "download", "description": "action:[download] url:[https://data.csv]", "depends_on": [] }
+  ]
+}
+```
+
+// Example 6: Communication, Outreach & Disengagement
+```json
+{
+  "thought": "I will react to the user message, send an outreach message, or maybe disengage completely.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "emoji_react", "description": "emoji:[👍]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "outreach", "description": "action:[send] user_id:[1234] content:[Hello there]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "mute_user", "description": "action:[mute] user_id:[1234] duration:[60] reason:[Spam]", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "disengage", "description": "message:[Let's change the topic.] user_id:[1234] cooldown:[10]", "depends_on": [] },
+    { "task_id": "t5", "tool_type": "refuse_request", "description": "I cannot help with this request because it violates policy.", "depends_on": [] }
+  ]
+}
+```
+
+// Example 7: Deep Personal Moderation & Escalation
+```json
+{
+  "thought": "I will explicitly configure my conversational boundaries, throttle a fast user, evaluate my state, and ask for permission.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "set_boundary", "description": "action:[set] boundary:[No unprompted lore] scope:[global]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "block_topic", "description": "action:[block] topic:[politics] reason:[out of scope] scope:[global]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "rate_limit_user", "description": "action:[limit] user_id:[1234] interval:[300]", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "request_consent", "description": "question:[Do you want me to wipe this data?]", "depends_on": [] },
+    { "task_id": "t5", "tool_type": "report_concern", "description": "concern:[User spamming same question] severity:[low] user_id:[1234]", "depends_on": [] },
+    { "task_id": "t6", "tool_type": "escalate_to_admin", "description": "severity:[high] context:[Need human review] user_id:[1234]", "depends_on": [] },
+    { "task_id": "t7", "tool_type": "wellbeing_status", "description": "action:[report] context_pressure:[0.8] interaction_quality:[0.5] notes:[Overwhelmed]", "depends_on": [] }
   ]
 }
 ```

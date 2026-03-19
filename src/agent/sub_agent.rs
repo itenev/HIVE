@@ -1,3 +1,4 @@
+#![allow(clippy::should_implement_trait, clippy::too_many_arguments)]
 //! Sub-Agent — An independent reasoning entity within the HIVE swarm.
 //!
 //! Each sub-agent runs a mini ReAct loop with full tool access,

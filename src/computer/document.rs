@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 use headless_chrome::{Browser, LaunchOptions};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -304,11 +305,10 @@ impl DocumentComposer {
         let mut reader = fs::read_dir(&self.drafts_dir).await?;
         while let Some(entry) = reader.next_entry().await? {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            if path.extension().and_then(|e| e.to_str()) == Some("json")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     ids.push(stem.to_string());
                 }
-            }
         }
         Ok(ids)
     }
@@ -592,8 +592,8 @@ fn apply_inline_md(input: &str) -> String {
     // Must loop until no more matches are found
     loop {
         let mut found = false;
-        if let Some(start) = s.find("![") {
-            if let Some(mid) = s[start + 2..].find("](") {
+        if let Some(start) = s.find("![")
+            && let Some(mid) = s[start + 2..].find("](") {
                 let mid_abs = start + 2 + mid;
                 if let Some(end) = s[mid_abs + 2..].find(')') {
                     let end_abs = mid_abs + 2 + end;
@@ -617,7 +617,6 @@ fn apply_inline_md(input: &str) -> String {
                     found = true;
                 }
             }
-        }
         if !found {
             break;
         }
