@@ -107,7 +107,7 @@ impl GoalTree {
 
     fn load(path: &PathBuf) -> GoalTreeData {
         if path.exists() {
-            if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(raw) = tokio::task::block_in_place(|| std::fs::read_to_string(path)) {
                 if let Ok(data) = serde_json::from_str::<GoalTreeData>(&raw) {
                     return data;
                 }
@@ -118,10 +118,10 @@ impl GoalTree {
 
     fn save(data: &GoalTreeData, path: &PathBuf) {
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = tokio::task::block_in_place(|| std::fs::create_dir_all(parent));
         }
         if let Ok(json) = serde_json::to_string_pretty(data) {
-            let _ = std::fs::write(path, json);
+            let _ = tokio::task::block_in_place(|| std::fs::write(path, json));
         }
     }
 

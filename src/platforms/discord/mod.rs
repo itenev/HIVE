@@ -163,13 +163,23 @@ impl Platform for DiscordPlatform {
             return Err(PlatformError::Other("Invalid discord platform routing ID".into()));
         }
 
-        let channel_id: u64 = parts[1].parse().unwrap_or(0);
-        let thinking_msg_id: u64 = if parts.len() >= 3 { parts[2].parse().unwrap_or(0) } else { 0 };
-
         let http_lock = self.http.lock().await;
         let http = http_lock.as_ref().ok_or(PlatformError::Other("Discord HTTP client not initialized".into()))?;
 
-        let channel = serenity::model::id::ChannelId::new(channel_id);
+        let (channel, thinking_msg_id) = if parts[1] == "user" {
+            let uid: u64 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            if uid == 0 { return Err(PlatformError::Other("Invalid user ID".into())); }
+            let serenity_user = serenity::model::id::UserId::new(uid);
+            let dm_channel = serenity_user.create_dm_channel(http).await.map_err(|e| PlatformError::Other(e.to_string()))?;
+            (dm_channel.id, 0)
+        } else if parts[1] == "channel" {
+            let cid: u64 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            (serenity::model::id::ChannelId::new(cid), 0)
+        } else {
+            let cid: u64 = parts[1].parse().unwrap_or(0);
+            let tid: u64 = if parts.len() >= 3 { parts[2].parse().unwrap_or(0) } else { 0 };
+            (serenity::model::id::ChannelId::new(cid), tid)
+        };
 
         if response.is_telemetry {
             if thinking_msg_id > 0 {

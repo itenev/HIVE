@@ -21,6 +21,9 @@ pub async fn execute_outreach(
     inbox: Option<Arc<InboxManager>>,
     drives: Option<Arc<DriveSystem>>,
     telemetry_tx: Option<mpsc::Sender<String>>,
+    outbound_tx: Option<mpsc::Sender<crate::models::message::Response>>,
+    invoker_uid: String,
+    is_admin: bool,
 ) -> ToolResult {
     if let Some(ref tx) = telemetry_tx {
         let _ = tx.send("📨 Outreach Agent Tool executing...\n".to_string()).await;
@@ -40,6 +43,17 @@ pub async fn execute_outreach(
     let action = parse_outreach_param(&description, "action")
         .unwrap_or_default()
         .to_lowercase();
+
+    if let Some(uid) = parse_outreach_param(&description, "user_id") {
+        if uid != invoker_uid && invoker_uid != "apis_autonomy" && !is_admin {
+            return ToolResult {
+                task_id,
+                output: "🚫 SECURITY VIOLATION: You are not authorized to manage outreach or send messages to other users. You may only specify your own user_id.".to_string(),
+                tokens_used: 0,
+                status: ToolStatus::Failed("Permission Denied".to_string()),
+            };
+        }
+    }
 
     match action.as_str() {
         "set_frequency" => {
@@ -114,9 +128,24 @@ pub async fn execute_outreach(
             let mut results = Vec::new();
 
             if matches!(delivery, OutreachDelivery::Dm | OutreachDelivery::Both) {
+                let mut message_in_flight = false;
+                if let Some(ref tx) = outbound_tx {
+                    let response = crate::models::message::Response {
+                        platform: format!("discord:user:{}", uid),
+                        target_scope: crate::models::scope::Scope::Private { user_id: uid.clone() },
+                        text: content.clone(),
+                        is_telemetry: false,
+                    };
+                    if tx.send(response).await.is_ok() {
+                        message_in_flight = true;
+                    }
+                }
+                
                 if let Some(ref mgr) = inbox {
                     if let Some(msg) = mgr.add_message(&uid, &content) {
-                        if msg.priority == InboxPriority::Notify {
+                        if message_in_flight {
+                            results.push("📬 dm:live+queued".to_string());
+                        } else if msg.priority == InboxPriority::Notify {
                             results.push("📬 dm:queued (notify priority)".to_string());
                         } else {
                             results.push("📬 dm:queued".to_string());
@@ -124,8 +153,10 @@ pub async fn execute_outreach(
                     } else {
                         results.push("🔇 dm:muted".to_string());
                     }
+                } else if message_in_flight {
+                    results.push("📬 dm:live".to_string());
                 } else {
-                    results.push("⚠️ dm:no_inbox".to_string());
+                    results.push("⚠️ dm:no_inbox_no_dispatch".to_string());
                 }
             }
 
@@ -134,7 +165,18 @@ pub async fn execute_outreach(
                 if channel_id.is_empty() {
                     results.push("⚠️ public:no_channel_id (set OUTREACH_CHANNEL_ID)".to_string());
                 } else {
-                    results.push(format!("📢 public:queued → <@{uid}> {content}"));
+                    if let Some(ref tx) = outbound_tx {
+                        let response = crate::models::message::Response {
+                            platform: format!("discord:channel:{}", channel_id),
+                            target_scope: crate::models::scope::Scope::Public { channel_id: channel_id.clone(), user_id: uid.clone() },
+                            text: format!("<@{uid}> {content}"),
+                            is_telemetry: false,
+                        };
+                        let _ = tx.send(response).await;
+                        results.push(format!("📢 public:live → <@{uid}>"));
+                    } else {
+                        results.push(format!("📢 public:queued → <@{uid}>"));
+                    }
                 }
             }
 
@@ -165,7 +207,7 @@ mod tests {
         assert_eq!(parse_outreach_param(desc, "missing"), None);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_outreach_missing_gate() {
         let res = execute_outreach(
             "1".into(),
@@ -174,11 +216,14 @@ mod tests {
             None,
             None,
             None,
+            None,
+            "123".to_string(),
+            true,
         ).await;
         assert_eq!(res.status, ToolStatus::Failed("OutreachGate missing".to_string()));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_outreach_missing_params() {
         use crate::providers::MockProvider;
         use std::env;
@@ -197,6 +242,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            "123".to_string(),
+            true,
         ).await;
         assert_eq!(res.status, ToolStatus::Failed("bad params".to_string()));
 
@@ -207,11 +255,14 @@ mod tests {
             None,
             None,
             None,
+            None,
+            "123".to_string(),
+            true,
         ).await;
         assert_eq!(res2.status, ToolStatus::Failed("bad params".to_string()));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_outreach_set_frequency() {
         use crate::providers::MockProvider;
         use std::env;
@@ -229,6 +280,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            "user456".to_string(),
+            true,
         ).await;
         
         assert_eq!(res.status, ToolStatus::Success);
@@ -240,11 +294,14 @@ mod tests {
             None,
             None,
             None,
+            None,
+            "user456".to_string(),
+            true,
         ).await;
         assert!(verify.output.contains("High"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_outreach_set_delivery() {
         use crate::providers::MockProvider;
         use std::env;
@@ -262,12 +319,15 @@ mod tests {
             None,
             None,
             None,
+            None,
+            "user789".to_string(),
+            true,
         ).await;
         
         assert_eq!(res.status, ToolStatus::Success);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_outreach_send_muted() {
         use crate::providers::MockProvider;
         use std::env;
@@ -286,6 +346,9 @@ mod tests {
             None,
             None,
             None,
+            None,
+            "user999".to_string(),
+            true,
         ).await;
 
         let res = execute_outreach(
@@ -295,13 +358,16 @@ mod tests {
             None,
             None,
             None,
+            None,
+            "user999".to_string(),
+            true,
         ).await;
         
         // can_outreach() catches delivery=none BEFORE the none_policy path
         assert_eq!(res.status, ToolStatus::Failed("outreach_blocked".to_string()));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_outreach_inbox_status() {
         use crate::providers::MockProvider;
         use std::env;
@@ -321,6 +387,9 @@ mod tests {
             Some(inbox.clone()),
             None,
             None,
+            None,
+            "user111".to_string(),
+            true,
         ).await;
         
         assert_eq!(res.status, ToolStatus::Success);
@@ -332,6 +401,9 @@ mod tests {
             Some(inbox.clone()),
             None,
             None,
+            None,
+            "user111".to_string(),
+            true,
         ).await;
         assert!(stat.output.contains("1 unread message"));
     }

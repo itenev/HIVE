@@ -865,9 +865,10 @@ impl Engine {
                                     
                                     teacher_clone.reset_counts();
 
-                                    let output = std::process::Command::new("python3")
+                                    let output = tokio::process::Command::new("python3")
                                         .arg("training/train_teacher.py")
-                                        .output();
+                                        .output()
+                                        .await;
 
                                     match output {
                                         Ok(res) => {

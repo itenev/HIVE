@@ -21,6 +21,7 @@ pub fn dispatch_native_tool(
     capabilities: Option<Arc<crate::models::capabilities::AgentCapabilities>>,
     goal_store: Option<Arc<crate::engine::goals::GoalStore>>,
     tool_forge: Option<Arc<crate::agent::tool_forge::ToolForge>>,
+    outbound_tx: Option<tokio::sync::mpsc::Sender<crate::models::message::Response>>,
 ) -> Option<tokio::task::JoinHandle<ToolResult>> {
     let task_id = task.task_id.clone();
     let desc = task.description.clone();
@@ -130,8 +131,14 @@ pub fn dispatch_native_tool(
     } 
     
     if tool_type == "outreach" {
+        let invoker_uid = match scope {
+            Scope::Private { user_id } => user_id.clone(),
+            Scope::Public { user_id, .. } => user_id.clone(),
+        };
+        let is_admin = capabilities.as_ref().map_or(false, |c| c.admin_users.contains(&invoker_uid));
+
         let handle = tokio::spawn(crate::agent::outreach::execute_outreach(
-            task_id, desc, outreach_gate, inbox, drives, tx_clone,
+            task_id, desc, outreach_gate, inbox, drives, tx_clone, outbound_tx, invoker_uid, is_admin,
         ));
         return Some(handle);
     } 
@@ -642,6 +649,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             );
             
             assert!(handle.is_some(), "Tool {} should return a handle", t);
@@ -670,6 +678,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(dup_handle.is_some());
         
@@ -688,6 +697,7 @@ mod tests {
             None,
             mem.clone(),
             provider.clone(),
+            None,
             None,
             None,
             None,

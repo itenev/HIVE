@@ -478,6 +478,7 @@ impl AgentManager {
         telemetry_tx: Option<tokio::sync::mpsc::Sender<String>>,
         swarm_agent: Option<Arc<AgentManager>>,
         swarm_caps: Option<Arc<crate::models::capabilities::AgentCapabilities>>,
+        outbound_tx: Option<tokio::sync::mpsc::Sender<crate::models::message::Response>>,
     ) -> Vec<ToolResult> {
         let mut futures = vec![];
 
@@ -497,6 +498,7 @@ impl AgentManager {
                 swarm_caps.clone(),
                 self.goal_store.clone(),
                 self.tool_forge.clone(),
+                outbound_tx.clone(),
             ) {
                 futures.push(handle);
                 continue;

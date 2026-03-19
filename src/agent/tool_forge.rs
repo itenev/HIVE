@@ -113,18 +113,18 @@ impl ToolForge {
         let script_path = self.tools_dir.join(&script_filename);
 
         // Write script
-        let _ = std::fs::create_dir_all(&self.tools_dir);
-        std::fs::write(&script_path, &code).map_err(|e| format!("Failed to write script: {}", e))?;
+        let _ = tokio::fs::create_dir_all(&self.tools_dir).await;
+        tokio::fs::write(&script_path, &code).await.map_err(|e| format!("Failed to write script: {}", e))?;
 
         // Make bash scripts executable
         if language == "bash" {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(&script_path) {
+                if let Ok(meta) = tokio::fs::metadata(&script_path).await {
                     let mut perms = meta.permissions();
                     perms.set_mode(0o755);
-                    let _ = std::fs::set_permissions(&script_path, perms);
+                    let _ = tokio::fs::set_permissions(&script_path, perms).await;
                 }
             }
         }
@@ -153,7 +153,7 @@ impl ToolForge {
             .ok_or_else(|| format!("Tool '{}' not found.", name))?;
 
         let script_path = self.tools_dir.join(&tool.script_filename);
-        std::fs::write(&script_path, &code).map_err(|e| format!("Failed to write: {}", e))?;
+        tokio::fs::write(&script_path, &code).await.map_err(|e| format!("Failed to write: {}", e))?;
         tool.version += 1;
         tool.created_at = now_ts();
         let new_version = tool.version;
@@ -180,7 +180,7 @@ impl ToolForge {
         let tool = data.tools.iter().find(|t| t.name == name)
             .ok_or_else(|| format!("Tool '{}' not found.", name))?;
         let script_path = self.tools_dir.join(&tool.script_filename);
-        let _ = std::fs::remove_file(&script_path);
+        let _ = tokio::fs::remove_file(&script_path).await;
         data.tools.retain(|t| t.name != name);
         Self::save(&data, &self.tools_dir);
         Ok(format!("🗑️ Tool '{}' deleted.", name))

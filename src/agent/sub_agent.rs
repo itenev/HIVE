@@ -246,6 +246,7 @@ pub async fn execute_sub_agent(
                     Some(telemetry_tx.clone()),
                     Some(agent_manager.clone()),
                     Some(capabilities.clone()),
+                    None,
                 ).await;
 
                 for res in &tool_results {
