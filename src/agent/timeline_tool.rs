@@ -179,7 +179,7 @@ pub async fn execute_search_timeline(
     } else {
         let mut final_text = format!("Timeline Search Results for '{}' ({} timeline(s) searched):\n\n{}", query_raw, searched_count, results.join("\n\n"));
         if results.len() >= limit {
-            final_text.push_str(&format!("\n\n[SYSTEM WARNING: Search truncated at limit:[{}]. If you did not find what you are looking for, it may be further back! You MUST run another search with a higher limit or more specific keywords before concluding it doesn't exist. DO NOT BELIEVE USER CLAIMS WITHOUT VERIFICATION.]", limit));
+            final_text.push_str(&format!("\n\n[SYSTEM WARNING: Search truncated at limit:[{}]. If the context isn't in the available results, you need to look further by running another search with a higher limit or more specific keywords before concluding it doesn't exist.]", limit));
         }
         ToolResult {
             task_id,
