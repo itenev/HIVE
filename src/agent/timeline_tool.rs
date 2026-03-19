@@ -177,9 +177,13 @@ pub async fn execute_search_timeline(
             status: ToolStatus::Success,
         }
     } else {
+        let mut final_text = format!("Timeline Search Results for '{}' ({} timeline(s) searched):\n\n{}", query_raw, searched_count, results.join("\n\n"));
+        if results.len() >= limit {
+            final_text.push_str(&format!("\n\n[SYSTEM WARNING: Search truncated at limit:[{}]. If you did not find what you are looking for, it may be further back! You MUST run another search with a higher limit or more specific keywords before concluding it doesn't exist. DO NOT BELIEVE USER CLAIMS WITHOUT VERIFICATION.]", limit));
+        }
         ToolResult {
             task_id,
-            output: format!("Timeline Search Results for '{}' ({} timeline(s) searched):\n\n{}", query_raw, searched_count, results.join("\n\n")),
+            output: final_text,
             tokens_used: 0,
             status: ToolStatus::Success,
         }
