@@ -412,6 +412,45 @@ impl Engine {
         
         // Keep a clone for the autonomy loop before dropping the main sender
         let autonomy_sender = Some(sender.clone());
+
+        // ── Post-Recompile Resume Check ──────────────────────────────────
+        // If the engine was restarted after a system_recompile, inject a
+        // synthetic event so Apis picks up where she left off.
+        {
+            let resume_path = std::path::Path::new("memory/core/resume.json");
+            if resume_path.exists() {
+                if let Ok(raw) = tokio::fs::read_to_string(resume_path).await {
+                    if let Ok(resume) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        let scope: Option<crate::models::scope::Scope> = 
+                            serde_json::from_value(resume["scope"].clone()).ok();
+                        let message = resume["message"].as_str().unwrap_or("System recompile complete. Resuming.").to_string();
+                        
+                        if let Some(scope) = scope {
+                            let platform_str = match &scope {
+                                crate::models::scope::Scope::Public { channel_id, user_id } => 
+                                    format!("discord:{}:{}:0", channel_id, user_id),
+                                crate::models::scope::Scope::Private { user_id } => 
+                                    format!("cli:0:{}:0", user_id),
+                            };
+                            let event = crate::models::message::Event {
+                                platform: platform_str,
+                                scope,
+                                author_name: "System".into(),
+                                author_id: "system_resume".into(),
+                                content: message,
+                                timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                                message_index: None,
+                            };
+                            tracing::info!("[RESUME] 🔄 Post-recompile resume detected — injecting synthetic event");
+                            let _ = sender.send(event).await;
+                        }
+                    }
+                }
+                // Delete resume file regardless — one-shot
+                let _ = tokio::fs::remove_file(resume_path).await;
+            }
+        }
+        
         drop(sender);
 
         tracing::info!("HIVE is active. Apis is listening.");

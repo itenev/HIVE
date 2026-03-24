@@ -232,8 +232,9 @@ pub fn dispatch_native_tool(
     }
     
     if tool_type == "system_recompile" {
+        let scope_clone = scope.clone();
         let handle = tokio::spawn(async move {
-            crate::agent::compiler_tool::execute_compiler(task_id, desc, tx_clone).await
+            crate::agent::compiler_tool::execute_compiler(task_id, desc, scope_clone, tx_clone).await
         });
         return Some(handle);
     }

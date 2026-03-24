@@ -1,10 +1,12 @@
 use crate::models::tool::{ToolResult, ToolStatus};
+use crate::models::scope::Scope;
 use tokio::sync::mpsc;
 use crate::agent::preferences::extract_tag;
 
 pub async fn execute_compiler(
     task_id: String,
     description: String,
+    scope: Scope,
     telemetry_tx: Option<mpsc::Sender<String>>,
 ) -> ToolResult {
     let action = extract_tag(&description, "action:").unwrap_or_else(|| "system_recompile".to_string());
@@ -36,6 +38,15 @@ pub async fn execute_compiler(
                     
                     // Copy the binary explicitly to avoid lock conflicts during the shell script swap
                     let _ = std::fs::copy("target/release/HIVE", "HIVE_next");
+                    
+                    // Save resume state so Apis continues where she left off after restart
+                    let resume = serde_json::json!({
+                        "scope": scope,
+                        "message": "System recompile completed successfully. I have been upgraded and restarted. Resuming operations. Confirm to the user that the upgrade was successful."
+                    });
+                    let _ = std::fs::create_dir_all("memory/core");
+                    let _ = std::fs::write("memory/core/resume.json", serde_json::to_string_pretty(&resume).unwrap_or_default());
+                    tracing::info!("[UPGRADE_DAEMON] Resume state saved to memory/core/resume.json");
                     
                     telemetry!(telemetry_tx, "  🔄 Engaging detached upgrade script and gracefully exiting physical process...\n".into());
                     
@@ -87,7 +98,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_bad_action() {
-        let r = execute_compiler("1".into(), "action:[explode]".into(), None).await;
+        let scope = Scope::Private { user_id: "test".into() };
+        let r = execute_compiler("1".into(), "action:[explode]".into(), scope, None).await;
         assert!(matches!(r.status, ToolStatus::Failed(_)));
         assert!(r.output.contains("Unrecognized"));
     }
