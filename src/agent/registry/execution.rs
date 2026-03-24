@@ -479,13 +479,7 @@ pub fn dispatch_native_tool(
         return Some(handle);
     } 
     
-    if tool_type == "synthesizer" {
-        let ctx_clone = context.to_string();
-        let handle = tokio::spawn(async move {
-            crate::agent::synthesis_tool::execute_synthesizer(task_id, desc, ctx_clone, provider, tx_clone).await
-        });
-        return Some(handle);
-    }
+
 
     // ─── SWARM DELEGATION TOOLS ────────────────────────────────
     if tool_type == "delegate" || tool_type == "research_swarm" {
@@ -707,7 +701,7 @@ mod tests {
             "review_reasoning", "read_attachment", "manage_user_preferences",
             "manage_skill", "manage_routine", "manage_lessons", "manage_goals", "tool_forge", "search_timeline",
             "manage_scratchpad", "operate_synaptic_graph", "read_core_memory",
-            "synthesizer", "download", "list_cached_images",
+            "download", "list_cached_images",
             // Swarm delegation tools
             "delegate", "research_swarm",
             // Self-moderation tools

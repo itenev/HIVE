@@ -10,7 +10,7 @@ pub mod planner;
 pub mod tool;
 pub mod preferences;
 pub mod synthesis;
-pub mod synthesis_tool;
+
 pub mod outreach;
 pub mod skills;
 pub mod routines;
@@ -154,7 +154,6 @@ impl AgentManager {
                 Forged tools appear in your tool registry immediately after creation.".into(),
             tools: vec![],
         };
-        let synthesizer = ToolTemplate { name: "synthesizer".into(), system_prompt: "Fan-in aggregator drone. Reads all DRONE OUTPUT blocks already in context and condenses them into a single compact synthesis. Use this as the final task in a multi-wave plan when you need to merge results before replying. Description: plain English instruction on what to synthesise, e.g. 'Summarise the web and memory results into 3 key findings.'. CRITICAL INSTRUCTION: If any drone output includes a tag like [ATTACH_IMAGE](...), [ATTACH_FILE](...), or [ATTACH_AUDIO](...), you MUST include that EXACT tag verbatim in your output so it reaches the user.".into(), tools: vec![] };
         let read_logs = ToolTemplate { name: "read_logs".into(), system_prompt: "Reads deep spans of the core system log (logs/hive.log) for debug introspection. Description format: 'action:[read] lines:[number of lines to read starting from the tail]'".into(), tools: vec![] };
         let review_reasoning = ToolTemplate { name: "review_reasoning".into(), system_prompt: "Read your historical ReAct reasoning traces from the PERSISTENT timeline (survives beyond the working memory window). Use this to recall why you made decisions from any point in the session, even if those turns have left your ~100 message window. Description format: 'limit:[N]' to retrieve the N most recent reasoning traces (default 5). Also accepts legacy 'turns_ago:[N]' as alias for limit.".into(), tools: vec![] };
         let operate_turing_grid = ToolTemplate {
@@ -327,7 +326,7 @@ impl AgentManager {
         registry.insert(manage_routine.name.clone(), manage_routine);
         registry.insert(manage_goals.name.clone(), manage_goals);
         registry.insert(tool_forge_template.name.clone(), tool_forge_template);
-        registry.insert(synthesizer.name.clone(), synthesizer);
+
         registry.insert(read_logs.name.clone(), read_logs);
         registry.insert(review_reasoning.name.clone(), review_reasoning);
         registry.insert(operate_turing_grid.name.clone(), operate_turing_grid);
