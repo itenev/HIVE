@@ -239,6 +239,13 @@ pub fn dispatch_native_tool(
         return Some(handle);
     }
     
+    if tool_type == "project_contributors" {
+        let handle = tokio::spawn(async move {
+            crate::agent::contributors_tool::execute_contributors(task_id, desc, tx_clone).await
+        });
+        return Some(handle);
+    }
+    
     if tool_type == "operate_turing_grid" {
         let mem_clone = memory.clone();
         let handle = tokio::spawn(async move {
@@ -694,7 +701,7 @@ mod tests {
         let tools = vec![
             "channel_reader", "outreach", "codebase_list", "codebase_read",
             "web_search", "researcher", "generate_image", "voice_synthesizer",
-            "take_snapshot", "send_email", "set_alarm", "smart_home", "system_recompile",
+            "take_snapshot", "send_email", "set_alarm", "smart_home", "system_recompile", "project_contributors",
             "operate_turing_grid", "file_writer", "read_logs", "run_bash_command",
             "process_manager", "file_system_operator", "autonomy_activity",
             "review_reasoning", "read_attachment", "manage_user_preferences",

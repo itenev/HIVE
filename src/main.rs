@@ -102,8 +102,8 @@ pub async fn run_app() {
     // 3. Inject Dynamic Tool Tooling into Capabilities 
     let capabilities = AgentCapabilities {
         admin_users: vec![
-            "1299810741984956449".into(), // metta_mazza
-            "1282286389953695745".into(), // afreakyfrog
+            "1299810741984956449".into(), // primary admin
+            "1282286389953695745".into(), // secondary admin
             "local_admin".into(),         // CLI access
             "apis_autonomy".into(),       // Autonomy loop — full tool access
         ],

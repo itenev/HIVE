@@ -91,7 +91,7 @@ pub fn decode_message(msg: &Message, bot_user_id: Option<serenity::model::id::Us
         return MessageAction::DmRestricted;
     }
 
-    if is_dm && is_admin && is_tending && author_id_str != "1299810741984956449" {
+    if is_dm && is_admin && is_tending && !capabilities.admin_users.first().map_or(false, |primary| *primary == author_id_str) {
         return MessageAction::TendingBusy;
     }
 
@@ -214,7 +214,7 @@ pub async fn handle_message(handler: &super::Handler, ctx: Context, msg: Message
             });
         }
         MessageAction::ToggleAiComms { user_id, author_name } => {
-            if user_id == 1299810741984956449 {
+            if handler.capabilities.admin_users.contains(&user_id.to_string()) {
                 let current = handler.aicoms_enabled.load(std::sync::atomic::Ordering::SeqCst);
                 handler.aicoms_enabled.store(!current, std::sync::atomic::Ordering::SeqCst);
                 let state_str = if !current { "**enabled** 🤖✅" } else { "**disabled** 🤖❌" };
@@ -244,7 +244,7 @@ pub async fn handle_message(handler: &super::Handler, ctx: Context, msg: Message
             }
         }
         MessageAction::Sweep { user_id, channel_id } => {
-            if user_id == 1299810741984956449 {
+            if handler.capabilities.admin_users.contains(&user_id.to_string()) {
                 let _ = msg.react(&ctx.http, serenity::model::channel::ReactionType::Unicode("🧹".to_string())).await;
                 let c_id = serenity::model::id::ChannelId::new(channel_id);
                 let http = ctx.http.clone();
@@ -318,7 +318,7 @@ pub async fn handle_message(handler: &super::Handler, ctx: Context, msg: Message
             tracing::info!("[SESSION] /new triggered by {} — working memory archived and cleared.", user_name);
         }
         MessageAction::TendingBusy => {
-            let _ = msg.reply(&ctx.http, "Sorry I'm away right now doing testing but we develop publicly so you can watch me and Maria work in the public channel, I'll be back soon!").await;
+            let _ = msg.reply(&ctx.http, "Sorry I'm away right now doing testing but we develop publicly so you can watch in the public channel, I'll be back soon!").await;
         }
         MessageAction::DmRestricted => {
             let response = "🐝 **Access Restricted** 🌼\n\nGreetings! I've noticed you're attempting to establish a private uplink. My direct neural pathways are currently reserved for administrative overrides only.\n\nHowever, you are more than welcome to interact with me in my public habitat: <#1479744132904915125>! There, you can explore my capabilities and see the HIVE in action for free.\n\nPrefer total sovereignty? You can download my entire program and run your own independent HIVE on your own hardware with zero restrictions: https://github.com/MettaMazza/HIVE";

@@ -69,7 +69,7 @@ impl EventHandler for Handler {
 
                 let _ = self.event_sender.send(ev).await;
             } else if command.data.name.as_str() == "sweep" {
-                // Hardcoded Admin ID Check
+                // Admin-only command
                 if command.user.id.get() != 1299810741984956449 {
                     let data = CreateInteractionResponseMessage::new()
                         .content("❌ You do not have permission to use this command.")
@@ -253,7 +253,7 @@ impl EventHandler for Handler {
 
         // Intercept text-based /sweep command (since slash commands take an hour to sync)
         if msg.content.trim() == "/sweep" {
-            // Hardcoded Admin ID Check
+            // Admin-only command
             if msg.author.id.get() == 1299810741984956449 {
                 let _ = msg.react(&ctx.http, serenity::model::channel::ReactionType::Unicode("🧹".to_string())).await;
                 

@@ -103,7 +103,7 @@ pub async fn handle_interaction(handler: &super::Handler, ctx: Context, interact
         }
         InteractionAction::Sweep { user_id, channel_id: _ } => {
             if let Interaction::Command(command) = &interaction {
-                if user_id != 1299810741984956449 {
+                if !handler.capabilities.admin_users.contains(&user_id.to_string()) {
                     let data = CreateInteractionResponseMessage::new()
                         .content("❌ You do not have permission to use this command.")
                         .ephemeral(true);
@@ -161,7 +161,7 @@ pub async fn handle_interaction(handler: &super::Handler, ctx: Context, interact
         }
         InteractionAction::Tending { user_id } => {
             if let Interaction::Command(command) = &interaction {
-                if user_id != 1299810741984956449 {
+                if !handler.capabilities.admin_users.contains(&user_id.to_string()) {
                     let data = CreateInteractionResponseMessage::new()
                         .content("❌ You do not have permission to use this command.")
                         .ephemeral(true);
@@ -185,7 +185,7 @@ pub async fn handle_interaction(handler: &super::Handler, ctx: Context, interact
         }
         InteractionAction::Proxy { user_id, target_channel, message } => {
             if let Interaction::Command(command) = &interaction {
-                if user_id != 1299810741984956449 {
+                if !handler.capabilities.admin_users.contains(&user_id.to_string()) {
                     let data = CreateInteractionResponseMessage::new()
                         .content("❌ You do not have permission to use this command.")
                         .ephemeral(true);

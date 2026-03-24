@@ -287,7 +287,7 @@ mod tests {
         let event = Event {
             platform: "discord".into(),
             scope: Scope::Public { channel_id: "c1".into(), user_id: "u1".into() },
-            author_name: "Maria".into(),
+            author_name: "TestUser".into(),
             author_id: "u1".into(),
             content: "I'm playing Pokemon Pokopia and watching UFO videos.".into(),
             timestamp: Some(chrono::Utc::now().to_rfc3339()),

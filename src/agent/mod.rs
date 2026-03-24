@@ -46,6 +46,7 @@ pub mod email_tool;
 pub mod calendar_tool;
 pub mod smarthome_tool;
 pub mod compiler_tool;
+pub mod contributors_tool;
 
 pub struct AgentManager {
     registry: HashMap<String, ToolTemplate>,
@@ -297,12 +298,21 @@ impl AgentManager {
             tools: vec![],
         };
 
+        let project_contributors = ToolTemplate {
+            name: "project_contributors".into(),
+            system_prompt: "Returns information about the HIVE project creator and all contributors. Uses git history to determine development timeline and contributor list. \
+            Usage: action:[info] — returns creator details, first/latest commits, total commits, and all contributors from git shortlog. \
+            Use this tool when anyone asks who made you, who your creator is, who develops HIVE, or about the project's history.".into(),
+            tools: vec![],
+        };
+
         registry.insert(researcher.name.clone(), researcher);
         registry.insert(visualizer.name.clone(), visualizer);
         registry.insert(send_email.name.clone(), send_email);
         registry.insert(set_alarm.name.clone(), set_alarm);
         registry.insert(smart_home.name.clone(), smart_home);
         registry.insert(system_recompile.name.clone(), system_recompile);
+        registry.insert(project_contributors.name.clone(), project_contributors);
         registry.insert(codebase_list.name.clone(), codebase_list);
         registry.insert(codebase_read.name.clone(), codebase_read);
         registry.insert(web_search.name.clone(), web_search);
