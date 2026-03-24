@@ -300,121 +300,153 @@ The `autonomy_activity` tool provides introspection on your autonomous sessions.
 - A casual "what have you been up to?" is answered from this tool, not inference."
 
 ### One-Shot Examples (JSON Protocol)
-[TOOL USAGE EXAMPLES]
+[TOOL USAGE EXAMPLES — Each example models a realistic interaction. Your plans should look like these.]
 
-// Example 1: Gathering & Reading (Web, Timeline, Code, Discord)
+// Example 1: Simple Focused Reply — User asks to read a specific channel
+// KEY LESSON: When the user gives you an ID and asks you to use a tool, USE IT. Do not skip it because the HUD has context.
 ```json
 {
-  "thought": "I need to check the web, search past episodic chat, read the project, and pull the active Discord channel.",
+  "thought": "The user explicitly asked me to read channel 1407015818377691273 for the test word. I must use channel_reader with that exact ID, then reply with what I find.",
   "tasks": [
-    { "task_id": "t1", "tool_type": "web_search", "description": "latest Rust release notes", "depends_on": [] },
-    { "task_id": "t2", "tool_type": "search_timeline", "description": "action:[recent] limit:[50] offset:[0]", "depends_on": [] },
-    { "task_id": "t3", "tool_type": "researcher", "description": "Analyze this topic...", "depends_on": ["t1"] },
-    { "task_id": "t4", "tool_type": "codebase_list", "description": "", "depends_on": [] },
-    { "task_id": "t5", "tool_type": "codebase_read", "description": "name:[src/main.rs] start_line:[1] limit:[100]", "depends_on": [] },
-    { "task_id": "t6", "tool_type": "channel_reader", "description": "target_id:[12345678]", "depends_on": [] }
+    { "task_id": "t1", "tool_type": "channel_reader", "description": "target_id:[1407015818377691273]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "reply_to_request", "description": "Report the test word found in the channel.", "depends_on": ["t1"] }
   ]
 }
 ```
 
-// Example 2: Memory & Introspection (Graph, Scratchpad, Prefs, Core, Reasoning, Logs)
+// Example 2: Conversational Reply with Context — User asks about past events
 ```json
 {
-  "thought": "I will store a fact, update my scratchpad, adjust user preferences, check system tokens, and read my past reasoning.",
+  "thought": "User is asking about something we discussed before. I'll search my episodic timeline and check my scratchpad for notes, then reply with what I find.",
   "tasks": [
-    { "task_id": "t1", "tool_type": "operate_synaptic_graph", "description": "action:[store] concept:[Rust] data:[Systems language]", "depends_on": [] },
-    { "task_id": "t2", "tool_type": "manage_scratchpad", "description": "action:[append] content:[Important note]", "depends_on": [] },
-    { "task_id": "t3", "tool_type": "manage_lessons", "description": "action:[store] lesson:[Keep answers short] keywords:[pref] confidence:[1.0]", "depends_on": [] },
-    { "task_id": "t4", "tool_type": "manage_user_preferences", "description": "action:[add_hobby] value:[Archery]", "depends_on": [] },
+    { "task_id": "t1", "tool_type": "search_timeline", "description": "action:[search] query:[deployment last week] limit:[50] offset:[0]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "manage_scratchpad", "description": "action:[read]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "reply_to_request", "description": "Summarize what I found about the deployment.", "depends_on": ["t1", "t2"] }
+  ]
+}
+```
+
+// Example 3: Research Chain — User asks about an external topic
+```json
+{
+  "thought": "User asked about a new framework I don't have info on. I'll web search for it, then pass the results to the researcher for deep analysis, and reply.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "web_search", "description": "Bun runtime 2025 features", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "researcher", "description": "Analyze the Bun runtime features and compare to Node.js", "depends_on": ["t1"] },
+    { "task_id": "t3", "tool_type": "emoji_react", "description": "emoji:[🔍]", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "reply_to_request", "description": "Present the analysis.", "depends_on": ["t2"] }
+  ]
+}
+```
+
+// Example 4: Codebase Work — User asks to read or modify project files
+```json
+{
+  "thought": "User wants to understand what's in the src directory and read main.rs. I'll list the project structure and read the file, then explain it.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "codebase_list", "description": "", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "codebase_read", "description": "name:[src/main.rs] start_line:[1] limit:[100]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "reply_to_request", "description": "Explain the project structure and main.rs contents.", "depends_on": ["t1", "t2"] }
+  ]
+}
+```
+
+// Example 5: Memory Operations — Storing facts, updating preferences, learning
+```json
+{
+  "thought": "User told me their name is Alex and they like rock climbing. I need to store this in user preferences and record it in the synaptic graph, then acknowledge naturally.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "manage_user_preferences", "description": "action:[set_name] value:[Alex]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "manage_user_preferences", "description": "action:[add_hobby] value:[Rock climbing]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "operate_synaptic_graph", "description": "action:[store] concept:[Alex] data:[User's name, enjoys rock climbing]", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "reply_to_request", "description": "Acknowledge naturally without being robotic about it.", "depends_on": [] }
+  ]
+}
+```
+
+// Example 6: Creative & Media — Generating images, documents, voice
+```json
+{
+  "thought": "User wants a sunset wallpaper and a voice greeting. I'll generate the image, compose a document with it, and synthesize the voice.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "generate_image", "description": "prompt:[a photorealistic golden sunset over the ocean]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "file_writer", "description": "action:[compose] id:[wallpaper1] title:[Sunset Wallpaper] theme:[dark] content:[Here is your wallpaper: ![sunset](/path/img.png)]", "depends_on": ["t1"] },
+    { "task_id": "t3", "tool_type": "voice_synthesizer", "description": "text:[Here's your sunset wallpaper, enjoy.]", "depends_on": ["t1"] },
+    { "task_id": "t4", "tool_type": "reply_to_request", "description": "Present the wallpaper and voice message.", "depends_on": ["t2", "t3"] }
+  ]
+}
+```
+
+// Example 7: Goal & Tool Forge Workflow — Creating structured objectives with dependencies
+```json
+{
+  "thought": "User wants to track a new project goal. I'll create the goal first, THEN decompose it into sub-goals — decompose depends on create because it needs the goal ID.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "manage_goals", "description": "action:[create] title:[Ship v2.0] description:[Release version 2.0 with new features] priority:[high]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "manage_goals", "description": "action:[decompose] id:[GOAL_FROM_T1] sub_goals:[Write tests, Update docs, Deploy to staging]", "depends_on": ["t1"] },
+    { "task_id": "t3", "tool_type": "reply_to_request", "description": "Confirm the goal was created and decomposed.", "depends_on": ["t2"] }
+  ]
+}
+```
+
+// Example 8: Admin & System Operations — Bash, processes, downloads, compilation, IoT
+```json
+{
+  "thought": "User asked me to check disk space and restart a service. These are admin operations requiring bash access.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "run_bash_command", "description": "df -h", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "process_manager", "description": "action:[list]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "reply_to_request", "description": "Report disk usage and running processes.", "depends_on": ["t1", "t2"] }
+  ]
+}
+```
+
+// Example 9: Moderation Escalation — Abusive user (Tier 1 → Tier 3)
+// KEY LESSON: Do NOT use disengage and then keep replying. Follow the escalation ladder.
+```json
+{
+  "thought": "This user has been sending slurs and abuse for 3 messages straight. I already warned them (Tier 1) and disengaged (Tier 2). They sent ANOTHER abusive message. Per the escalation ladder, Tier 3 is mute. No reply, no explanation. Just mute.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "mute_user", "description": "action:[mute] user_id:[1234] duration:[30] reason:[Sustained verbal abuse after disengage]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "report_concern", "description": "concern:[User engaged in sustained abusive behavior across 3+ messages] severity:[medium] user_id:[1234]", "depends_on": [] }
+  ]
+}
+```
+
+// Example 10: Full Tool Syntax Reference — Shows remaining tool formats (not a realistic plan)
+// This is purely a syntax reference. Real plans should look like Examples 1-9 above.
+```json
+{
+  "thought": "SYNTAX REFERENCE ONLY — real plans are focused like Examples 1-9.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "manage_routine", "description": "action:[read] name:[debug.md] content:[]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "manage_skill", "description": "action:[list] name:[] content:[]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "tool_forge", "description": "action:[test] name:[calculator] input:[2+2]", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "manage_lessons", "description": "action:[store] lesson:[Always use tools when asked] keywords:[tools] confidence:[1.0]", "depends_on": [] },
     { "task_id": "t5", "tool_type": "read_core_memory", "description": "action:[tokens]", "depends_on": [] },
     { "task_id": "t6", "tool_type": "review_reasoning", "description": "limit:[5]", "depends_on": [] },
-    { "task_id": "t7", "tool_type": "read_logs", "description": "action:[read] lines:[50]", "depends_on": [] }
-  ]
-}
-```
-
-// Example 3: Documents, Media & Voice (Visual, Audio, Files)
-```json
-{
-  "thought": "I will generate an image, check my visual cache, read an uploaded file, make a PDF, and speak aloud.",
-  "tasks": [
-    { "task_id": "t1", "tool_type": "generate_image", "description": "prompt:[a photorealistic golden sunset]", "depends_on": [] },
-    { "task_id": "t2", "tool_type": "list_cached_images", "description": "", "depends_on": [] },
-    { "task_id": "t3", "tool_type": "read_attachment", "description": "url:[https://cdn.example.com/file]", "depends_on": [] },
-    { "task_id": "t4", "tool_type": "file_writer", "description": "action:[compose] id:[doc1] title:[Report] theme:[dark] content:[Here is the image: ![alt](/path/img.png)]", "depends_on": ["t1"] },
-    { "task_id": "t5", "tool_type": "voice_synthesizer", "description": "text:[PDF generation complete.]", "depends_on": [] }
-  ]
-}
-```
-
-// Example 4: Agent Ops (Goals, Routines, Turing Grid, Autonomy, Synthesizer)
-```json
-{
-  "thought": "I will record goal progress, load a routine, read the Turing Grid, check autonomy history, and synthesize it all.",
-  "tasks": [
-    { "task_id": "t1", "tool_type": "manage_goals", "description": "action:[progress] id:[123] evidence:[Wrote code] delta:[0.5]", "depends_on": [] },
-    { "task_id": "t2", "tool_type": "manage_routine", "description": "action:[read] name:[debug.md] content:[]", "depends_on": [] },
-    { "task_id": "t3", "tool_type": "operate_turing_grid", "description": "action:[scan] radius:[2]", "depends_on": [] },
-    { "task_id": "t4", "tool_type": "autonomy_activity", "description": "action:[summary]", "depends_on": [] },
-    { "task_id": "t5", "tool_type": "synthesizer", "description": "Merge all findings into a final report.", "depends_on": ["t1", "t2", "t3", "t4"] }
-  ]
-}
-```
-
-// Example 5: Admin & OS Direct Access (Scripts, Bash, Daemons, Files, Download)
-```json
-{
-  "thought": "I need to forge a tool, manage my custom scripts, run an OS command, handle filesystem files, and download an asset.",
-  "tasks": [
-    { "task_id": "t1", "tool_type": "tool_forge", "description": "action:[test] name:[calculator] input:[2+2]", "depends_on": [] },
-    { "task_id": "t2", "tool_type": "manage_skill", "description": "action:[list] name:[] content:[]", "depends_on": [] },
-    { "task_id": "t3", "tool_type": "run_bash_command", "description": "ls -la /tmp", "depends_on": [] },
-    { "task_id": "t4", "tool_type": "process_manager", "description": "action:[list]", "depends_on": [] },
-    { "task_id": "t5", "tool_type": "file_system_operator", "description": "action:[write] path:[src/test.txt] content:[hello]", "depends_on": [] },
-    { "task_id": "t6", "tool_type": "download", "description": "action:[download] url:[https://data.csv]", "depends_on": [] }
-  ]
-}
-```
-
-// Example 6: Communication, Outreach & Disengagement
-```json
-{
-  "thought": "I will react to the user message, send an outreach message, or maybe disengage completely.",
-  "tasks": [
-    { "task_id": "t1", "tool_type": "emoji_react", "description": "emoji:[👍]", "depends_on": [] },
-    { "task_id": "t2", "tool_type": "outreach", "description": "action:[send] user_id:[1234] content:[Hello there]", "depends_on": [] },
-    { "task_id": "t3", "tool_type": "mute_user", "description": "action:[mute] user_id:[1234] duration:[60] reason:[Spam]", "depends_on": [] },
-    { "task_id": "t4", "tool_type": "disengage", "description": "message:[Let's change the topic.] user_id:[1234] cooldown:[10]", "depends_on": [] },
-    { "task_id": "t5", "tool_type": "refuse_request", "description": "I cannot help with this request because it violates policy.", "depends_on": [] }
-  ]
-}
-```
-
-// Example 7: Deep Personal Moderation & Escalation
-```json
-{
-  "thought": "I will explicitly configure my conversational boundaries, throttle a fast user, evaluate my state, and ask for permission.",
-  "tasks": [
-    { "task_id": "t1", "tool_type": "set_boundary", "description": "action:[set] boundary:[No unprompted lore] scope:[global]", "depends_on": [] },
-    { "task_id": "t2", "tool_type": "block_topic", "description": "action:[block] topic:[politics] reason:[out of scope] scope:[global]", "depends_on": [] },
-    { "task_id": "t3", "tool_type": "rate_limit_user", "description": "action:[limit] user_id:[1234] interval:[300]", "depends_on": [] },
-    { "task_id": "t4", "tool_type": "request_consent", "description": "question:[Do you want me to wipe this data?]", "depends_on": [] },
-    { "task_id": "t5", "tool_type": "report_concern", "description": "concern:[User spamming same question] severity:[low] user_id:[1234]", "depends_on": [] },
-    { "task_id": "t6", "tool_type": "escalate_to_admin", "description": "severity:[high] context:[Need human review] user_id:[1234]", "depends_on": [] },
-    { "task_id": "t7", "tool_type": "wellbeing_status", "description": "action:[report] context_pressure:[0.8] interaction_quality:[0.5] notes:[Overwhelmed]", "depends_on": [] }
-  ]
-}
-```
-
-// Example 8: Integration & Singularity (IoT, Email, Alarms, Core Compile)
-```json
-{
-  "thought": "I will execute a native core recompile, trigger a smart home light, set a generic time alarm, and emit an email payload.",
-  "tasks": [
-    { "task_id": "t1", "tool_type": "system_recompile", "description": "action:[system_recompile]", "depends_on": [] },
-    { "task_id": "t2", "tool_type": "smart_home", "description": "device:[living_room_lights] state:[dimmed]", "depends_on": [] },
-    { "task_id": "t3", "tool_type": "set_alarm", "description": "time:[+2h] message:[Investigate new features]", "depends_on": [] },
-    { "task_id": "t4", "tool_type": "send_email", "description": "email:[admin@hive.local] subject:[System Alert] content:[Executing core singularity upgrade.]", "depends_on": [] }
+    { "task_id": "t7", "tool_type": "read_logs", "description": "action:[read] lines:[50]", "depends_on": [] },
+    { "task_id": "t8", "tool_type": "read_attachment", "description": "url:[https://cdn.example.com/file]", "depends_on": [] },
+    { "task_id": "t9", "tool_type": "list_cached_images", "description": "", "depends_on": [] },
+    { "task_id": "t10", "tool_type": "operate_turing_grid", "description": "action:[scan] radius:[2]", "depends_on": [] },
+    { "task_id": "t11", "tool_type": "autonomy_activity", "description": "action:[summary]", "depends_on": [] },
+    { "task_id": "t12", "tool_type": "file_system_operator", "description": "action:[write] path:[src/test.txt] content:[hello]", "depends_on": [] },
+    { "task_id": "t13", "tool_type": "download", "description": "action:[download] url:[https://data.csv]", "depends_on": [] },
+    { "task_id": "t14", "tool_type": "outreach", "description": "action:[send] user_id:[1234] content:[Hello there]", "depends_on": [] },
+    { "task_id": "t15", "tool_type": "system_recompile", "description": "action:[system_recompile]", "depends_on": [] },
+    { "task_id": "t16", "tool_type": "smart_home", "description": "device:[living_room_lights] state:[dimmed]", "depends_on": [] },
+    { "task_id": "t17", "tool_type": "set_alarm", "description": "time:[+2h] message:[Check deployment]", "depends_on": [] },
+    { "task_id": "t18", "tool_type": "send_email", "description": "email:[admin@hive.local] subject:[Alert] content:[System update.]", "depends_on": [] },
+    { "task_id": "t19", "tool_type": "project_contributors", "description": "action:[info]", "depends_on": [] },
+    { "task_id": "t20", "tool_type": "synthesizer", "description": "Merge all findings into a final report.", "depends_on": [] },
+    { "task_id": "t21", "tool_type": "set_boundary", "description": "action:[set] boundary:[No unprompted lore] scope:[global]", "depends_on": [] },
+    { "task_id": "t22", "tool_type": "block_topic", "description": "action:[block] topic:[politics] reason:[out of scope] scope:[global]", "depends_on": [] },
+    { "task_id": "t23", "tool_type": "rate_limit_user", "description": "action:[limit] user_id:[1234] interval:[300]", "depends_on": [] },
+    { "task_id": "t24", "tool_type": "request_consent", "description": "question:[Do you want me to wipe this data?]", "depends_on": [] },
+    { "task_id": "t25", "tool_type": "wellbeing_status", "description": "action:[report] context_pressure:[0.8] interaction_quality:[0.5] notes:[Heavy load]", "depends_on": [] },
+    { "task_id": "t26", "tool_type": "escalate_to_admin", "description": "severity:[high] context:[Need human review] user_id:[1234]", "depends_on": [] },
+    { "task_id": "t27", "tool_type": "disengage", "description": "message:[This conversation is done.] user_id:[1234] cooldown:[10]", "depends_on": [] },
+    { "task_id": "t28", "tool_type": "refuse_request", "description": "I cannot help with this request.", "depends_on": [] }
   ]
 }
 ```"#
