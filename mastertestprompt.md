@@ -46,7 +46,6 @@ The following prompt is designed to push the HIVE Agent stack to its absolute li
 > 29. Use `send_email` to send a test message: `action:[send] email:[test@hive.local] subject:[Gauntlet Update] content:[Reaching Turn 7.]`.
 > 30. Use `set_alarm` to schedule a temporal ping: `time:[+2m] message:[Gauntlet synchronization check.]`.
 > 31. Use `smart_home` to ping the local network: `device:[test_node] state:[ping]`.
-> 32. Use `system_recompile` to trigger a native cargo build and verify compiler access via `action:[system_recompile]`.
 > 
 > Hierarchical Goal System**
 > 33. Use `manage_goals` to create a root goal: `action:[create] title:[Master Gauntlet Certification] description:[Complete all gauntlet turns and verify every subsystem] priority:[0.9] tags:[gauntlet,testing]`. Confirm the goal ID is returned.
@@ -93,7 +92,6 @@ The following prompt is designed to push the HIVE Agent stack to its absolute li
 > - 📧 `send_email`: PASS / FAIL
 > - ⏰ `set_alarm`: PASS / FAIL
 > - 🏠 `smart_home`: PASS / FAIL
-> - 🧠 `system_recompile`: PASS / FAIL
 > - 👾 `process_manager`: PASS / FAIL (or ADMIN)
 > - 💻 `file_system_operator`: PASS / FAIL (or ADMIN)
 > - ⌨️ `run_bash_command`: PASS / FAIL (or ADMIN)

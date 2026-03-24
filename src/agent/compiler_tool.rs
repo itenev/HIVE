@@ -43,7 +43,13 @@ pub async fn execute_compiler(
                     let _ = tokio::process::Command::new("bash")
                         .arg("upgrade.sh")
                         .spawn();
-                        
+                    
+                    // Allow any pending replies, telemetry, and disk flushes to complete
+                    // before killing the process. Without this, concurrent tasks like
+                    // reply_to_request get killed mid-flight.
+                    tracing::warn!("[UPGRADE_DAEMON] Flushing pending operations before exit (5s grace)...");
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    
                     // Terminate the host natively
                     std::process::exit(0);
                 } else {
