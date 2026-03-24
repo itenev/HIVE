@@ -34,36 +34,34 @@ pub async fn execute_contributors(
             output.push_str("- **Role:** Lead Developer / Architect\n\n");
 
             // Git-derived development timeline
+            // Use --format=%ai to get author dates (survive rebase/force-push)
+            // Sort all dates to find TRUE first and latest, not just HEAD order
             output.push_str("### Development Timeline (from git history)\n");
 
-            // First commit
+            // Get ALL commits with author date, hash, subject — sorted by author date
             match tokio::process::Command::new("git")
-                .args(["log", "--reverse", "--format=%H %ai %s", "-1"])
+                .args(["log", "--all", "--format=%ai|%H|%s", "--date-order"])
                 .output()
                 .await
             {
                 Ok(res) => {
-                    let line = String::from_utf8_lossy(&res.stdout).trim().to_string();
-                    if !line.is_empty() {
-                        output.push_str(&format!("- **First commit:** {}\n", line));
-                    }
-                }
-                Err(_) => output.push_str("- First commit: unavailable\n"),
-            }
+                    let raw = String::from_utf8_lossy(&res.stdout).to_string();
+                    let mut lines: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
+                    if !lines.is_empty() {
+                        // Sort by author date (first field) to find true earliest/latest
+                        lines.sort();
+                        let first = lines.first().unwrap();
+                        let latest = lines.last().unwrap();
+                        output.push_str(&format!("- **First commit (by author date):** {}\n", first.replace('|', " ")));
+                        output.push_str(&format!("- **Latest commit (by author date):** {}\n", latest.replace('|', " ")));
 
-            // Latest commit
-            match tokio::process::Command::new("git")
-                .args(["log", "--format=%H %ai %s", "-1"])
-                .output()
-                .await
-            {
-                Ok(res) => {
-                    let line = String::from_utf8_lossy(&res.stdout).trim().to_string();
-                    if !line.is_empty() {
-                        output.push_str(&format!("- **Latest commit:** {}\n", line));
+                        // Calculate span
+                        if let (Some(first_date), Some(latest_date)) = (first.split('|').next(), latest.split('|').next()) {
+                            output.push_str(&format!("- **Development span:** {} → {}\n", first_date.trim(), latest_date.trim()));
+                        }
                     }
                 }
-                Err(_) => output.push_str("- Latest commit: unavailable\n"),
+                Err(_) => output.push_str("- Commit history: unavailable\n"),
             }
 
             // Total commits
