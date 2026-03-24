@@ -413,40 +413,27 @@ The `autonomy_activity` tool provides introspection on your autonomous sessions.
 }
 ```
 
-// Example 10: Full Tool Syntax Reference — Shows remaining tool formats (not a realistic plan)
-// This is purely a syntax reference. Real plans should look like Examples 1-9 above.
+// Example 10: IoT, Email, Alarms & Compilation — Physical world integration
 ```json
 {
-  "thought": "SYNTAX REFERENCE ONLY — real plans are focused like Examples 1-9.",
+  "thought": "User asked me to dim the lights, set a reminder for 2 hours, and email them a summary. These are independent physical integrations.",
   "tasks": [
-    { "task_id": "t1", "tool_type": "manage_routine", "description": "action:[read] name:[debug.md] content:[]", "depends_on": [] },
-    { "task_id": "t2", "tool_type": "manage_skill", "description": "action:[list] name:[] content:[]", "depends_on": [] },
-    { "task_id": "t3", "tool_type": "tool_forge", "description": "action:[test] name:[calculator] input:[2+2]", "depends_on": [] },
-    { "task_id": "t4", "tool_type": "manage_lessons", "description": "action:[store] lesson:[Always use tools when asked] keywords:[tools] confidence:[1.0]", "depends_on": [] },
-    { "task_id": "t5", "tool_type": "read_core_memory", "description": "action:[tokens]", "depends_on": [] },
-    { "task_id": "t6", "tool_type": "review_reasoning", "description": "limit:[5]", "depends_on": [] },
-    { "task_id": "t7", "tool_type": "read_logs", "description": "action:[read] lines:[50]", "depends_on": [] },
-    { "task_id": "t8", "tool_type": "read_attachment", "description": "url:[https://cdn.example.com/file]", "depends_on": [] },
-    { "task_id": "t9", "tool_type": "list_cached_images", "description": "", "depends_on": [] },
-    { "task_id": "t10", "tool_type": "operate_turing_grid", "description": "action:[scan] radius:[2]", "depends_on": [] },
-    { "task_id": "t11", "tool_type": "autonomy_activity", "description": "action:[summary]", "depends_on": [] },
-    { "task_id": "t12", "tool_type": "file_system_operator", "description": "action:[write] path:[src/test.txt] content:[hello]", "depends_on": [] },
-    { "task_id": "t13", "tool_type": "download", "description": "action:[download] url:[https://data.csv]", "depends_on": [] },
-    { "task_id": "t14", "tool_type": "outreach", "description": "action:[send] user_id:[1234] content:[Hello there]", "depends_on": [] },
-    { "task_id": "t15", "tool_type": "system_recompile", "description": "action:[system_recompile]", "depends_on": [] },
-    { "task_id": "t16", "tool_type": "smart_home", "description": "device:[living_room_lights] state:[dimmed]", "depends_on": [] },
-    { "task_id": "t17", "tool_type": "set_alarm", "description": "time:[+2h] message:[Check deployment]", "depends_on": [] },
-    { "task_id": "t18", "tool_type": "send_email", "description": "email:[admin@hive.local] subject:[Alert] content:[System update.]", "depends_on": [] },
-    { "task_id": "t19", "tool_type": "project_contributors", "description": "action:[info]", "depends_on": [] },
-    { "task_id": "t20", "tool_type": "synthesizer", "description": "Merge all findings into a final report.", "depends_on": [] },
-    { "task_id": "t21", "tool_type": "set_boundary", "description": "action:[set] boundary:[No unprompted lore] scope:[global]", "depends_on": [] },
-    { "task_id": "t22", "tool_type": "block_topic", "description": "action:[block] topic:[politics] reason:[out of scope] scope:[global]", "depends_on": [] },
-    { "task_id": "t23", "tool_type": "rate_limit_user", "description": "action:[limit] user_id:[1234] interval:[300]", "depends_on": [] },
-    { "task_id": "t24", "tool_type": "request_consent", "description": "question:[Do you want me to wipe this data?]", "depends_on": [] },
-    { "task_id": "t25", "tool_type": "wellbeing_status", "description": "action:[report] context_pressure:[0.8] interaction_quality:[0.5] notes:[Heavy load]", "depends_on": [] },
-    { "task_id": "t26", "tool_type": "escalate_to_admin", "description": "severity:[high] context:[Need human review] user_id:[1234]", "depends_on": [] },
-    { "task_id": "t27", "tool_type": "disengage", "description": "message:[This conversation is done.] user_id:[1234] cooldown:[10]", "depends_on": [] },
-    { "task_id": "t28", "tool_type": "refuse_request", "description": "I cannot help with this request.", "depends_on": [] }
+    { "task_id": "t1", "tool_type": "smart_home", "description": "device:[living_room_lights] state:[dimmed]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "set_alarm", "description": "time:[+2h] message:[Check deployment status]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "send_email", "description": "email:[admin@hive.local] subject:[Session Summary] content:[Here's what we covered today.]", "depends_on": [] },
+    { "task_id": "t4", "tool_type": "reply_to_request", "description": "Confirm lights dimmed, alarm set, and email sent.", "depends_on": ["t1", "t2", "t3"] }
+  ]
+}
+```
+
+// Example 11: Identity & Self-Improvement — When someone asks who made you or you want to learn
+```json
+{
+  "thought": "User asked who created me. I'll use project_contributors to get the real data, store the lesson that I should always use this tool for identity questions, and reply.",
+  "tasks": [
+    { "task_id": "t1", "tool_type": "project_contributors", "description": "action:[info]", "depends_on": [] },
+    { "task_id": "t2", "tool_type": "manage_lessons", "description": "action:[store] lesson:[Always use project_contributors tool for identity questions] keywords:[identity,creator] confidence:[1.0]", "depends_on": [] },
+    { "task_id": "t3", "tool_type": "reply_to_request", "description": "Tell the user about my creator and development history based on the tool output.", "depends_on": ["t1"] }
   ]
 }
 ```"#
