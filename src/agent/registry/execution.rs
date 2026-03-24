@@ -34,8 +34,9 @@ pub fn dispatch_native_tool(
             if let Some(ref tx) = tx_clone {
                 let _ = tx.send(format!("🧠 Native Channel Reader Tool executing...\n")).await;
             }
-            // Try extracting from tag format first (e.g. "channel_id:[123]")
-            let target_id = crate::agent::preferences::extract_tag(&desc, "channel_id:")
+            // Try extracting from tag format (e.g. "target_id:[123]", "channel_id:[123]", "channel:[123]")
+            let target_id = crate::agent::preferences::extract_tag(&desc, "target_id:")
+                .or_else(|| crate::agent::preferences::extract_tag(&desc, "channel_id:"))
                 .or_else(|| crate::agent::preferences::extract_tag(&desc, "channel:"))
                 .unwrap_or_else(|| {
                     // Fallback: find any standalone numeric token > 10 digits

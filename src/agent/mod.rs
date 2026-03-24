@@ -75,7 +75,7 @@ impl AgentManager {
         // Discord-only tools
         let channel_reader = ToolTemplate {
             name: "channel_reader".into(),
-            system_prompt: "You natively pull the recent message history of the current channel based on the task description Target ID. You do not use LLM inference, you return the timeline JSONL block. The planner should provide the Target Entity ID in the description.".into(),
+            system_prompt: "Pull the recent message history of a Discord channel by its numeric ID. Description format: 'target_id:[CHANNEL_ID_NUMBER]'. Returns the last 50 messages as a formatted timeline. You can also use 'channel_id:[...]' as an alias.".into(),
             tools: vec![],
         };
         let emoji_react = ToolTemplate {

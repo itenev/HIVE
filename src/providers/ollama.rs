@@ -102,9 +102,9 @@ pub struct OllamaProvider {
 }
 
 impl OllamaProvider {
-    /// Connects to a local Ollama instance defaulting to `qwen3.5:122b` as requested.
+    /// Connects to a local Ollama instance defaulting to `qwen3.5:35b` as requested.
     pub fn new() -> Self {
-        Self::with_model("qwen3.5:122b")
+        Self::with_model("qwen3.5:35b")
     }
 
     /// Creates an OllamaProvider targeting a specific model.
