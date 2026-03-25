@@ -481,12 +481,32 @@ pub async fn execute_react_loop(
                 }
             }
 
-            // OUTPUT FORWARDING — Phase 2 (REMOVED)
-            // Previously auto-injected read_attachment/download outputs when the
-            // model's reply was under 2000 chars. This caused infinite observer
-            // audit loops because injected content (e.g. gauntlet instructions)
-            // contained raw tool syntax that the observer correctly blocked.
-            // The model must explicitly use source:"task_id" to forward content.
+            // OUTPUT FORWARDING — Phase 2: Automatic injection safety net.
+            // ONLY for verbatim-forwarding tools (read_attachment, download).
+            // ONLY injects when the verbatim tool ran in THIS turn (current
+            // completed_tools), not from stale outputs lingering from earlier turns.
+            if reply.source.is_none() && candidate_answer.len() < 2000 {
+                let verbatim_tools = ["read_attachment", "download"];
+                // Only consider tools that ran in THIS turn
+                let current_turn_verbatim: Vec<&String> = completed_tools.iter()
+                    .filter(|(_, ttype)| verbatim_tools.contains(&ttype.as_str()))
+                    .map(|(tid, _)| tid)
+                    .collect();
+
+                if !current_turn_verbatim.is_empty() {
+                    if let Some((_largest_id, largest_output)) = tool_outputs.iter()
+                        .filter(|(id, _)| current_turn_verbatim.contains(id))
+                        .max_by_key(|(_, v)| v.len())
+                        .filter(|(_, v)| v.len() > 2000)
+                    {
+                        tracing::info!(
+                            "[OUTPUT FORWARD] 🛡️ Auto-injecting verbatim tool output ({} bytes) — LLM reply was only {} chars.",
+                            largest_output.len(), candidate_answer.len()
+                        );
+                        candidate_answer = format!("{}\n\n{}", candidate_answer.trim(), largest_output.trim());
+                    }
+                }
+            }
 
             // ── SKEPTIC OBSERVER AUDIT (SYNCHRONOUS) ──
             // With the KV-cache optimization in observer.rs, this audit now
