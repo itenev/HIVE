@@ -224,6 +224,13 @@ pub fn dispatch_native_tool(
         return Some(handle);
     }
     
+    if tool_type == "manage_contacts" {
+        let handle = tokio::spawn(async move {
+            crate::agent::contacts_tool::execute_contacts(task_id, desc, tx_clone).await
+        });
+        return Some(handle);
+    }
+    
     if tool_type == "smart_home" {
         let handle = tokio::spawn(async move {
             crate::agent::smarthome_tool::execute_smarthome(task_id, desc, tx_clone).await

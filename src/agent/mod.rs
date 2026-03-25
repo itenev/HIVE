@@ -47,6 +47,7 @@ pub mod calendar_tool;
 pub mod smarthome_tool;
 pub mod compiler_tool;
 pub mod contributors_tool;
+pub mod contacts_tool;
 
 pub struct AgentManager {
     registry: HashMap<String, ToolTemplate>,
@@ -275,9 +276,21 @@ impl AgentManager {
 
         let set_alarm = ToolTemplate {
             name: "set_alarm".into(),
-            system_prompt: "Sets a physical alarm or reminder to wake you up in the future. \
-            Usage: action:[set_alarm] time:[+5m] message:[My Message]. \
-            Time supports relative formats like +1m, +2h, +3d, or full ISO8601 strings.".into(),
+            system_prompt: "Manages alarms and calendar events. \
+            ALARMS: action:[set_alarm] time:[+5m] message:[My Message] | action:[list_alarms] \
+            EVENTS: action:[create_event] title:[Team Meeting] start:[+1h] end:[+2h] location:[Office] details:[Discuss roadmap] recurring:[weekly] | action:[list_events] | action:[delete_event] id:[abc123] \
+            Time supports +1m, +2h, +3d or full ISO8601.".into(),
+            tools: vec![],
+        };
+
+        let manage_contacts = ToolTemplate {
+            name: "manage_contacts".into(),
+            system_prompt: "Manages the personal address book / contacts list. \
+            ADD: action:[add] name:[John Doe] email:[john@example.com] discord_id:[123] phone:[+61400000000] notes:[Met at conference] tags:[friend, dev] \
+            LIST: action:[list] \
+            SEARCH: action:[search] query:[john] — searches name, email, discord, phone, tags, and notes. \
+            UPDATE: action:[update] id:[abc123] name:[Jane] email:[new@email.com] \
+            DELETE: action:[delete] id:[abc123]".into(),
             tools: vec![],
         };
 
@@ -309,6 +322,7 @@ impl AgentManager {
         registry.insert(visualizer.name.clone(), visualizer);
         registry.insert(send_email.name.clone(), send_email);
         registry.insert(set_alarm.name.clone(), set_alarm);
+        registry.insert(manage_contacts.name.clone(), manage_contacts);
         registry.insert(smart_home.name.clone(), smart_home);
         registry.insert(system_recompile.name.clone(), system_recompile);
         registry.insert(project_contributors.name.clone(), project_contributors);
