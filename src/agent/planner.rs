@@ -1,8 +1,25 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Accept both `"thought": "string"` and `"thought": ["a", "b"]`
+fn deserialize_thought<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        Vec(Vec<String>),
+        String(String),
+    }
+    match StringOrVec::deserialize(deserializer)? {
+        StringOrVec::Vec(v) => Ok(v),
+        StringOrVec::String(s) => Ok(vec![s]),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPlan {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_thought")]
     pub thought: Vec<String>,
     pub tasks: Vec<AgentTask>,
 }
