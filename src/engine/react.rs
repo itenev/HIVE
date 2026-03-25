@@ -483,17 +483,27 @@ pub async fn execute_react_loop(
 
             // OUTPUT FORWARDING — Phase 2: Automatic injection safety net.
             // ONLY for verbatim-forwarding tools (read_attachment, download).
-            // ONLY injects when the verbatim tool ran in THIS turn (current
-            // completed_tools), not from stale outputs lingering from earlier turns.
+            // ONLY injects when the verbatim tool is the ONLY substantive tool
+            // in this turn — meaning the user asked to read/download something,
+            // not when the attachment was instructions being processed alongside
+            // other tools. This prevents injecting gauntlet-style instruction
+            // files when the model is executing commands, not reading back content.
             if reply.source.is_none() && candidate_answer.len() < 2000 {
                 let verbatim_tools = ["read_attachment", "download"];
-                // Only consider tools that ran in THIS turn
+                let non_cosmetic_tools = ["emoji_react"]; // ignore these when counting
+                
                 let current_turn_verbatim: Vec<&String> = completed_tools.iter()
                     .filter(|(_, ttype)| verbatim_tools.contains(&ttype.as_str()))
                     .map(|(tid, _)| tid)
                     .collect();
+                
+                // Count substantive (non-cosmetic) tools in this turn
+                let substantive_tool_count = completed_tools.iter()
+                    .filter(|(_, ttype)| !non_cosmetic_tools.contains(&ttype.as_str()))
+                    .count();
 
-                if !current_turn_verbatim.is_empty() {
+                // Only inject if read_attachment/download was the ONLY real tool
+                if !current_turn_verbatim.is_empty() && substantive_tool_count <= current_turn_verbatim.len() {
                     if let Some((_largest_id, largest_output)) = tool_outputs.iter()
                         .filter(|(id, _)| current_turn_verbatim.contains(id))
                         .max_by_key(|(_, v)| v.len())
