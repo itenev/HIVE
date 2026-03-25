@@ -3,7 +3,6 @@ use tokio::sync::mpsc;
 use crate::agent::preferences::extract_tag;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 // ── ALARMS ──
 
@@ -109,10 +108,9 @@ pub async fn execute_calendar(
                 status: "pending".into(),
             };
 
-            let alarms_path = Path::new(ALARMS_PATH);
             let _ = std::fs::create_dir_all("memory");
             
-            let mut alarms: Vec<AlarmPayload> = match tokio::fs::read_to_string(&alarms_path).await {
+            let mut alarms: Vec<AlarmPayload> = match tokio::fs::read_to_string(ALARMS_PATH).await {
                 Ok(json_str) => serde_json::from_str(&json_str).unwrap_or_else(|_| vec![]),
                 Err(_) => vec![],
             };
@@ -120,7 +118,7 @@ pub async fn execute_calendar(
             alarms.push(alarm);
             
             if let Ok(json_str) = serde_json::to_string_pretty(&alarms) {
-                if let Err(e) = tokio::fs::write(&alarms_path, json_str).await {
+                if let Err(e) = tokio::fs::write(ALARMS_PATH, json_str).await {
                     return ToolResult { task_id, output: format!("FS write failure: {}", e), tokens_used: 0, status: ToolStatus::Failed("FS Error".into()) };
                 }
                 telemetry!(telemetry_tx, "  ✅ Alarm set.\n".into());
@@ -132,8 +130,7 @@ pub async fn execute_calendar(
 
         // ── ALARM: List ──
         "list_alarms" => {
-            let alarms_path = Path::new(ALARMS_PATH);
-            let alarms: Vec<AlarmPayload> = match tokio::fs::read_to_string(&alarms_path).await {
+            let alarms: Vec<AlarmPayload> = match tokio::fs::read_to_string(ALARMS_PATH).await {
                 Ok(json_str) => serde_json::from_str(&json_str).unwrap_or_else(|_| vec![]),
                 Err(_) => vec![],
             };

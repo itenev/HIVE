@@ -62,7 +62,8 @@ pub async fn execute_react_loop(
         base_system_prompt.push_str(
             "\n\n[SITUATIONAL AWARENESS: PLATFORM = DISCORD]\n\
             You are currently communicating with the user through a Discord interface. \
-            You can embed links, write markdown, and use rich text formatting."
+            Discord supports markdown, but your default is natural conversational prose. \
+            Use formatting (bold, code blocks, links) only when delivering code, technical artifacts, or when the user explicitly requests structured output."
         );
     }
 

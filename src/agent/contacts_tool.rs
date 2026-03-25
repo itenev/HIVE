@@ -2,7 +2,6 @@ use crate::models::tool::{ToolResult, ToolStatus};
 use tokio::sync::mpsc;
 use crate::agent::preferences::extract_tag;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contact {
