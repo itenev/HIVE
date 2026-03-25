@@ -592,29 +592,11 @@ impl Engine {
                 }
             }
 
-            if bg_synth_needed || bg_daily_needed {
-                tracing::debug!("[ENGINE] 🔄 Spawning background synthesis (50-turn={}, daily={}, lifetime={})",
-                    bg_synth_needed, bg_daily_needed, bg_lifetime_needed);
-                let prov_clone = self.provider.clone();
-                let mem_clone = self.memory.clone();
-                let scope_clone = event.scope.clone();
-                let drives_clone = self.drives.clone();
-                let semaphore_synth = self.concurrency_semaphore.clone();
-                tokio::spawn(async move {
-                    // Acquire inference slot — prevents colliding with active user/autonomy inference
-                    let _permit = semaphore_synth.acquire().await.expect("Semaphore closed");
-                    tracing::debug!("[SYNTHESIS] 🎫 Acquired inference slot for background synthesis.");
-                    if bg_synth_needed {
-                        let _ = crate::agent::synthesis::synthesize_50_turn(prov_clone.clone(), mem_clone.clone(), scope_clone.clone(), Some(drives_clone.clone())).await;
-                    }
-                    if bg_daily_needed {
-                        let _ = crate::agent::synthesis::synthesize_24_hr(prov_clone.clone(), mem_clone.clone(), scope_clone.clone(), Some(drives_clone.clone())).await;
-                    }
-                    if bg_lifetime_needed {
-                        let _ = crate::agent::synthesis::synthesize_lifetime(prov_clone.clone(), mem_clone.clone(), scope_clone.clone(), Some(drives_clone.clone())).await;
-                    }
-                });
-            }
+            // NOTE: Synthesis is deferred until AFTER the ReAct loop completes.
+            // Previously, synthesis spawned here concurrently with the ReAct loop,
+            // causing concurrent provider.generate() calls that corrupted Ollama's
+            // HTTP streaming responses ("error decoding response body").
+            // Synthesis now runs inside the spawned user-event task, after delivery.
 
             // 2. Now store the incoming event in memory for future context
             self.memory.add_event(event.clone()).await;
@@ -781,6 +763,11 @@ impl Engine {
                 let scope_locks_bg = self.scope_locks.clone();
                 let autonomy_sender_bg = autonomy_sender.clone();
                 let autonomy_handle_bg = autonomy_handle.clone();
+                // Synthesis clones — runs AFTER the ReAct loop to avoid Ollama stream collision
+                let synth_provider = self.provider.clone();
+                let synth_memory = self.memory.clone();
+                let synth_scope = event.scope.clone();
+                let synth_drives = self.drives.clone();
 
                 let available = self.concurrency_semaphore.available_permits();
                 tracing::info!("[PARALLEL] 🐝 Spawning event from {} (scope: {}) — {}/{} inference slots available",
@@ -851,6 +838,22 @@ impl Engine {
 
                     // _permit dropped here → releases inference slot
                     // _scope_guard dropped here → releases per-scope lock
+
+                    // 7.4. Deferred Background Synthesis — runs AFTER the user gets their response.
+                    // This prevents concurrent provider.generate() calls that corrupt Ollama streams.
+                    if bg_synth_needed || bg_daily_needed {
+                        tracing::info!("[SYNTHESIS] 🔄 Running deferred synthesis (50-turn={}, daily={}, lifetime={})",
+                            bg_synth_needed, bg_daily_needed, bg_lifetime_needed);
+                        if bg_synth_needed {
+                            let _ = crate::agent::synthesis::synthesize_50_turn(synth_provider.clone(), synth_memory.clone(), synth_scope.clone(), Some(synth_drives.clone())).await;
+                        }
+                        if bg_daily_needed {
+                            let _ = crate::agent::synthesis::synthesize_24_hr(synth_provider.clone(), synth_memory.clone(), synth_scope.clone(), Some(synth_drives.clone())).await;
+                        }
+                        if bg_lifetime_needed {
+                            let _ = crate::agent::synthesis::synthesize_lifetime(synth_provider.clone(), synth_memory.clone(), synth_scope.clone(), Some(synth_drives.clone())).await;
+                        }
+                    }
 
                     // 7.5. Spawn Continuous Autonomy timer (5 min)
                     if event.author_name != "Apis" {
