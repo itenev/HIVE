@@ -48,6 +48,15 @@ pub async fn execute_read_attachment(
         
     match client.get(&url).send().await {
         Ok(resp) => {
+            let status = resp.status();
+            if !status.is_success() {
+                return ToolResult {
+                    task_id,
+                    output: format!("HTTP {} — Discord CDN rejected the request. The attachment URL has likely expired. Ask the user to re-upload the file.", status.as_u16()),
+                    tokens_used: 0,
+                    status: ToolStatus::Failed(format!("HTTP {}", status.as_u16())),
+                };
+            }
             match resp.bytes().await {
                 Ok(bytes) => {
                     let size = bytes.len();
