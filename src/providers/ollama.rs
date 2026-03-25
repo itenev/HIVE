@@ -244,14 +244,14 @@ impl Provider for OllamaProvider {
 
         let images_opt = if b64_images.is_empty() { None } else { Some(b64_images) };
 
-        // Strict enforcement for Turn 1 "Monkey see, monkey do" conversational degradation
-        // Skip this explicit reply_to_request coercion for internal audit runs so the
-        // Observer doesn't waste 12+ seconds hallucinating a massive 500-token ReAct envelope.
+        // Reminder of JSON output structure. The actual JSON enforcement is now handled
+        // at the GBNF grammar level via `format: "json"` in the OllamaRequest.
+        // This text hint reinforces the structure without implying the model should
+        // reply_to_request on every turn (which caused 9-minute reasoning spirals).
         if !agent_context.contains("[=== INTERNAL ENGINE INSTRUCTION: SWITCH TO AUDIT MODE ===]") {
-            final_user_message.push_str("\n\n[SYSTEM ENFORCEMENT: You must output EXACTLY ONE valid JSON block. Do not output raw conversational text. Use the `reply_to_request` tool to speak to the user.]");
+            final_user_message.push_str("\n\n[SYSTEM: JSON output enforced. Execute your next planned action.]");
         } else {
-            // Give the Observer a lighter hint so it just prints the tiny verdict JSON.
-            final_user_message.push_str("\n\n[SYSTEM ENFORCEMENT: Output EXACTLY ONE valid JSON block representing your audit verdict.]");
+            final_user_message.push_str("\n\n[SYSTEM: Output your audit verdict as JSON.]");
         }
 
         // Add the current triggering event
