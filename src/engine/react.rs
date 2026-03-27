@@ -596,13 +596,25 @@ pub async fn execute_react_loop(
                 .join("Cycle ");
             
             tracing::info!("[AGENT LOOP] 🕵️ Running Skeptic Audit on Turn {}...", current_turn);
+
+            // Strip image attachments from the event for the observer.
+            // The observer is a text auditor — it doesn't need images,
+            // and Ollama crashes on unsupported image formats (500: "image: unknown format").
+            let observer_event = {
+                let mut e = event.clone();
+                // Remove [USER_ATTACHMENT: ...] blocks (image URLs that Ollama can't process)
+                let re = regex::Regex::new(r"\[USER_ATTACHMENT:[^\]]*\]").unwrap();
+                e.content = re.replace_all(&e.content, "[IMAGE_ATTACHMENT_STRIPPED]").to_string();
+                e
+            };
+
             let audit_result = crate::prompts::observer::run_skeptic_audit(
                 provider.clone(),
                 &capabilities,
                 &candidate_answer,
                 &base_system_prompt,
                 history,
-                event,
+                &observer_event,
                 &clean_observer_context
             ).await;
 
