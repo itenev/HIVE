@@ -11,6 +11,7 @@ pub mod teacher;
 pub mod computer;
 pub mod voice;
 pub mod server;
+pub mod network;
 
 use std::sync::Arc;
 use tokio::io::AsyncBufRead;
