@@ -386,11 +386,13 @@ impl SleepCycle {
             &reflection_event,
             "",
             None,
-            Some(512), // Keep reflection concise
+            Some(1024), // Identity reflections need room to express
         ).await.map_err(|e| format!("Identity reflection inference failed: {}", e))?;
 
-        if reflection.trim().is_empty() {
-            return Err("Identity reflection returned empty".into());
+        // Handle empty or whitespace-only responses
+        let reflection = reflection.trim().to_string();
+        if reflection.is_empty() || reflection.len() < 20 {
+            return Err("Identity reflection returned empty or too short".into());
         }
 
         tracing::info!("💤 [SLEEP] 🪞 Identity reflection ({} chars): {}...",
