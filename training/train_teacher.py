@@ -286,10 +286,23 @@ def main():
     new_version = get_next_version(manifest)
     parent = manifest["current"]
 
-    # In stack mode, use the current (latest trained) model, not the base
-    train_from = parent if args.stack else manifest.get("base", BASE_MODEL)
+    # ALWAYS train from the base model. For cumulative stacking, we use
+    # --resume-adapter-file to load the previous adapter weights on top.
+    # The version labels (e.g. "apis-v1-20260327") are NOT model paths.
+    train_from = manifest.get("base", BASE_MODEL)
+    
+    # Find the latest adapter for stacking
+    resume_adapter = None
+    if args.stack and manifest.get("latest_adapter"):
+        adapter_dir = Path(manifest["latest_adapter"])
+        adapter_file = adapter_dir / "adapters.safetensors"
+        if adapter_file.exists():
+            resume_adapter = str(adapter_dir)
+            print(f"[TEACHER] Stacking on adapter: {resume_adapter}")
+        else:
+            print(f"[TEACHER] No previous adapter found, training from scratch")
 
-    print(f"[TEACHER] Training {new_version} (from: {train_from}, parent: {parent})")
+    print(f"[TEACHER] Training {new_version} (model: {train_from}, parent: {parent})")
     print(f"[TEACHER] Config: lr={LEARNING_RATE}, epochs={NUM_EPOCHS}, r={LORA_R}, seq_len={MAX_SEQ_LEN}")
 
     # MLX LoRA SFT training
@@ -306,6 +319,9 @@ def main():
             f"--max-seq-length {MAX_SEQ_LEN} "
             f"--adapter-path {OUTPUT_DIR}/adapters"
         )
+        # Append resume flag for cumulative stacking
+        if resume_adapter:
+            sft_cmd += f" --resume-adapter-file {resume_adapter}/adapters.safetensors"
         print(f"[TEACHER] Running: {sft_cmd}")
         exit_code = os.system(sft_cmd)
         if exit_code != 0:

@@ -154,7 +154,11 @@ impl AgentManager {
                 'action:[delete] name:[tool_name]' — remove tool. \
                 'action:[list]' — show all forged tools. \
                 Scripts receive input as JSON via stdin and should print results to stdout. \
-                Forged tools appear in your tool registry immediately after creation.".into(),
+                Forged tools appear in your tool registry immediately after creation. \
+                CRITICAL FORGE DISCIPLINE: Only forge GENERALIZED, REUSABLE tools that serve broad purposes across many situations. \
+                Do NOT forge one-off, highly-specialized, or throwaway scripts. Before forging, ask: 'Will this tool be useful in 10+ different situations?' \
+                If the answer is no, solve the problem with your existing tools instead. \
+                Only forge a specialized tool if there is truly NO other way to solve the problem with existing capabilities.".into(),
             tools: vec![],
         };
         let read_logs = ToolTemplate { name: "read_logs".into(), system_prompt: "Reads deep spans of the core system log (logs/hive.log) for debug introspection. Description format: 'action:[read] lines:[number of lines to read starting from the tail]'".into(), tools: vec![] };

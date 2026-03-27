@@ -115,14 +115,9 @@ impl OpenCodeBridge {
                 .map_err(|e| format!("Failed to write opencode.json: {}", e))?;
         }
 
-        // Launch server
+        // Launch OpenCode TUI (visual mode — pops up on screen)
         let child = tokio::process::Command::new("opencode")
-            .arg("serve")
-            .arg("--port")
-            .arg(OPENCODE_PORT.to_string())
             .current_dir(project_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| format!("Failed to spawn opencode: {}", e))?;
 
@@ -134,17 +129,10 @@ impl OpenCodeBridge {
         state.last_activity = std::time::Instant::now();
         drop(state);
 
-        // Wait for server to be ready (up to 10s)
-        for _ in 0..20 {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            if self.is_running().await {
-                tracing::info!("[OPENCODE] Server ready on port {} for {:?}", OPENCODE_PORT, project_dir);
-                return Ok(format!("✅ OpenCode launched on port {} for project: {}", 
-                    OPENCODE_PORT, project_dir.display()));
-            }
-        }
-
-        Err("OpenCode server failed to start within 10s".into())
+        // Give TUI a moment to render
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        tracing::info!("[OPENCODE] TUI launched for {:?}", project_dir);
+        return Ok(format!("✅ OpenCode TUI launched for project: {}", project_dir.display()));
     }
 
     /// Shut down the OpenCode server.
