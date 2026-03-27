@@ -873,8 +873,15 @@ impl Engine {
                         tracing::warn!("Received event from unknown platform: {}", event.platform);
                     }
 
-                    // _permit dropped here → releases inference slot
-                    // _scope_guard dropped here → releases per-scope lock
+                    // ── RELEASE LOCKS BEFORE POST-DELIVERY WORK ──────────
+                    // The scope lock serializes ReAct loops for the same channel/DM.
+                    // Once the response is stored in memory and delivered, the lock
+                    // MUST be released so the next request can start immediately.
+                    // Previously, these were implicitly dropped at end of the async
+                    // block (line ~992), holding the lock through synthesis, training,
+                    // and autonomy timer setup — blocking new requests for 30-70+ seconds.
+                    drop(_scope_guard);
+                    drop(_permit);
 
                     // 7.4. Deferred Background Synthesis — spawned AFTER _permit drops.
                     // Acquires its own inference slot, so it naturally queues behind
