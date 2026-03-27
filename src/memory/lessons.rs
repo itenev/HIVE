@@ -3,13 +3,27 @@ use std::path::PathBuf;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use crate::models::scope::Scope;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lesson {
+    /// Unique ID for deduplication across mesh peers.
+    #[serde(default = "default_lesson_id")]
+    pub id: String,
     pub text: String,
     pub keywords: Vec<String>,
     pub confidence: f32,
+    /// PeerId of the instance that learned this. "local" for locally-created lessons.
+    #[serde(default = "default_origin")]
+    pub origin: String,
+    /// RFC3339 timestamp of when this lesson was learned.
+    #[serde(default = "default_timestamp")]
+    pub learned_at: String,
 }
+
+fn default_lesson_id() -> String { Uuid::new_v4().to_string() }
+fn default_origin() -> String { "local".to_string() }
+fn default_timestamp() -> String { chrono::Utc::now().to_rfc3339() }
 
 #[derive(Debug, Clone)]
 pub struct LessonsManager {
@@ -95,15 +109,21 @@ mod tests {
         let priv_scope = Scope::Private { user_id: "u2".into() };
 
         let lesson1 = Lesson {
+            id: Uuid::new_v4().to_string(),
             text: "Fire is hot".into(),
             keywords: vec!["fire".into(), "hot".into()],
             confidence: 0.9,
+            origin: "local".into(),
+            learned_at: chrono::Utc::now().to_rfc3339(),
         };
 
         let lesson2 = Lesson {
+            id: Uuid::new_v4().to_string(),
             text: "Water is wet".into(),
             keywords: vec!["water".into()],
             confidence: 0.99,
+            origin: "local".into(),
+            learned_at: chrono::Utc::now().to_rfc3339(),
         };
 
         // Write lesson to public scope

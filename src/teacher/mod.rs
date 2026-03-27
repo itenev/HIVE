@@ -9,9 +9,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod evaluation;
 pub mod generation;
+pub mod sleep;
 
 pub use evaluation::PreferencePair;
 pub use generation::GoldenExample;
+pub use sleep::{SleepCycle, SleepConfig, SleepReport};
 
 /// Model version metadata for manifest.json lineage tracking.
 #[derive(Debug, Serialize, Deserialize)]
@@ -98,7 +100,7 @@ impl Teacher {
             training_lock: Arc::new(Mutex::new(false)),
             golden_count: Arc::new(AtomicUsize::new(initial_golden)),
             preference_count: Arc::new(AtomicUsize::new(initial_preference)),
-            auto_train_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            auto_train_enabled: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 

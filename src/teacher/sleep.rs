@@ -1,0 +1,579 @@
+/// Sleep Training — Biologically-inspired micro-batch LoRA training.
+///
+/// Simulates sleep-like memory consolidation:
+/// - `/sleep` command or 12-hour auto-timer triggers a micro-training cycle
+/// - Selects the top 1-2 highest-quality examples from the buffer
+/// - Trains with epochs=1, lr=1e-5, batch_size=1 on the PREVIOUS adapter
+/// - Each cycle produces an imperceptible weight delta that compounds over time
+///
+/// The key insight: cumulative stacking. Each sleep trains on top of the last
+/// adapter, not the base model. This creates gradual drift, like a human brain
+/// slowly consolidating memories during sleep.
+
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::io::AsyncWriteExt;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::teacher::{Teacher, GoldenExample};
+use crate::providers::Provider;
+use crate::memory::MemoryStore;
+use crate::models::message::Event;
+use crate::models::scope::Scope;
+
+/// Sleep configuration — intentionally conservative defaults.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepConfig {
+    /// Max examples per micro-training cycle (1-2 is the sweet spot)
+    pub micro_batch_size: usize,
+    /// Learning rate for micro-training (very low = subtle drift)
+    pub micro_lr: f64,
+    /// Epochs per micro-cycle (1 = single pass, minimal overfitting)
+    pub micro_epochs: usize,
+    /// Seconds between automatic sleep cycles (43200 = 12 hours)
+    pub auto_sleep_interval_secs: u64,
+    /// Max sequence length for micro-training (lower = less VRAM)
+    pub micro_max_seq_len: usize,
+}
+
+impl Default for SleepConfig {
+    fn default() -> Self {
+        Self {
+            micro_batch_size: 2,
+            micro_lr: 1e-5,
+            micro_epochs: 1,
+            auto_sleep_interval_secs: 43200, // 12 hours
+            micro_max_seq_len: 8192,
+        }
+    }
+}
+
+impl SleepConfig {
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        if let Ok(v) = std::env::var("HIVE_SLEEP_BATCH") {
+            if let Ok(n) = v.parse() {
+                config.micro_batch_size = n;
+            }
+        }
+        if let Ok(v) = std::env::var("HIVE_SLEEP_LR") {
+            if let Ok(lr) = v.parse() {
+                config.micro_lr = lr;
+            }
+        }
+        if let Ok(v) = std::env::var("HIVE_SLEEP_INTERVAL") {
+            if let Ok(secs) = v.parse() {
+                config.auto_sleep_interval_secs = secs;
+            }
+        }
+
+        config
+    }
+}
+
+/// Report generated after a sleep cycle completes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepReport {
+    pub version: String,
+    pub parent: String,
+    pub golden_used: usize,
+    pub pairs_used: usize,
+    pub identity_reinforced: bool,
+    pub duration_secs: f64,
+    pub timestamp: String,
+    pub quality_scores: Vec<f64>,
+}
+
+impl std::fmt::Display for SleepReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let identity = if self.identity_reinforced { " + identity reflection" } else { "" };
+        write!(
+            f,
+            "☀️ Woke up. Dreamed of {} examples{} → {} (parent: {}, {:.1}s)",
+            self.golden_used + self.pairs_used,
+            identity,
+            self.version,
+            self.parent,
+            self.duration_secs,
+        )
+    }
+}
+
+/// The sleep cycle orchestrator.
+pub struct SleepCycle {
+    pub config: SleepConfig,
+    pub last_sleep: Arc<Mutex<Option<DateTime<Utc>>>>,
+    pub teacher: Arc<Teacher>,
+    /// Provider for identity reflection inference (None in tests)
+    provider: Option<Arc<dyn Provider>>,
+    /// Memory store for reading lessons + synaptic graph (None in tests)
+    memory: Option<Arc<MemoryStore>>,
+}
+
+impl SleepCycle {
+    pub fn new(teacher: Arc<Teacher>, config: Option<SleepConfig>) -> Self {
+        Self {
+            config: config.unwrap_or_else(SleepConfig::from_env),
+            last_sleep: Arc::new(Mutex::new(None)),
+            teacher,
+            provider: None,
+            memory: None,
+        }
+    }
+
+    /// Create with provider and memory for identity reflection.
+    pub fn with_inference(
+        teacher: Arc<Teacher>,
+        provider: Arc<dyn Provider>,
+        memory: Arc<MemoryStore>,
+        config: Option<SleepConfig>,
+    ) -> Self {
+        Self {
+            config: config.unwrap_or_else(SleepConfig::from_env),
+            last_sleep: Arc::new(Mutex::new(None)),
+            teacher,
+            provider: Some(provider),
+            memory: Some(memory),
+        }
+    }
+
+    /// Check if it's time for an automatic sleep cycle.
+    pub async fn should_auto_sleep(&self) -> bool {
+        let last = self.last_sleep.lock().await;
+        match *last {
+            None => {
+                // Never slept — check if we have any training data at all
+                let (golden, pairs) = self.teacher.get_counts();
+                golden > 0 || pairs > 0
+            }
+            Some(last_time) => {
+                let elapsed = Utc::now() - last_time;
+                let threshold = chrono::Duration::seconds(self.config.auto_sleep_interval_secs as i64);
+                if elapsed < threshold {
+                    return false;
+                }
+                // Only sleep if there's new data since last sleep
+                let (golden, pairs) = self.teacher.get_counts();
+                golden > 0 || pairs > 0
+            }
+        }
+    }
+
+    /// Enter sleep: select best examples, train, wake up.
+    pub async fn enter_sleep(&self) -> Result<SleepReport, String> {
+        let start = std::time::Instant::now();
+
+        // Acquire training lock
+        if !self.teacher.try_acquire_training_lock().await {
+            return Err("Training lock busy — another sleep cycle or training is in progress".into());
+        }
+
+        tracing::info!("💤 [SLEEP] Entering sleep cycle...");
+
+        // Load and rank examples
+        let golden = self.load_and_rank_golden()?;
+        let (golden_count, pair_count) = self.teacher.get_counts();
+
+        let selected_count = golden.len().min(self.config.micro_batch_size);
+        let quality_scores: Vec<f64> = golden.iter()
+            .take(selected_count)
+            .map(|g| g.quality_score)
+            .collect();
+
+        if selected_count == 0 && pair_count == 0 {
+            self.teacher.release_training_lock().await;
+            return Err("No training data available for sleep cycle".into());
+        }
+
+        tracing::info!(
+            "💤 [SLEEP] Selected {} golden examples (of {}) + {} pairs for micro-training",
+            selected_count, golden_count, pair_count
+        );
+
+        // Identity Reflection — Apis reviews her responses and reflects on who she is
+        let identity_reinforced = if self.provider.is_some() && selected_count > 0 {
+            match self.generate_identity_reflection(&golden, selected_count).await {
+                Ok(()) => {
+                    tracing::info!("💤 [SLEEP] 🪞 Identity reflection generated and appended to training data");
+                    true
+                }
+                Err(e) => {
+                    tracing::warn!("💤 [SLEEP] Identity reflection failed (non-fatal): {}", e);
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
+        // Run micro-training via Python script
+        let manifest = self.teacher.load_manifest();
+        let parent = manifest.current.clone();
+
+        let output = tokio::process::Command::new("python3")
+            .arg("training/train_teacher.py")
+            .arg("--micro")
+            .arg("--stack")
+            .arg("--examples")
+            .arg(selected_count.to_string())
+            .arg("--lr")
+            .arg(self.config.micro_lr.to_string())
+            .arg("--epochs")
+            .arg(self.config.micro_epochs.to_string())
+            .arg("--max-seq-len")
+            .arg(self.config.micro_max_seq_len.to_string())
+            .output()
+            .await
+            .map_err(|e| format!("Failed to execute training script: {}", e))?;
+
+        let duration = start.elapsed().as_secs_f64();
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            self.teacher.release_training_lock().await;
+            return Err(format!("Micro-training failed: {}", stderr));
+        }
+
+        // Read updated manifest
+        let updated_manifest = self.teacher.load_manifest();
+        let new_version = updated_manifest.current.clone();
+
+        // Reset counters and record sleep time
+        self.teacher.reset_counts();
+        {
+            let mut last = self.last_sleep.lock().await;
+            *last = Some(Utc::now());
+        }
+
+        self.teacher.release_training_lock().await;
+
+        let report = SleepReport {
+            version: new_version,
+            parent,
+            golden_used: selected_count,
+            pairs_used: pair_count.min(self.config.micro_batch_size),
+            identity_reinforced,
+            duration_secs: duration,
+            timestamp: Utc::now().to_rfc3339(),
+            quality_scores,
+        };
+
+        tracing::info!("☀️ [SLEEP] {}", report);
+
+        Ok(report)
+    }
+
+    /// Load golden examples from the buffer and rank by quality score.
+    fn load_and_rank_golden(&self) -> Result<Vec<ScoredGolden>, String> {
+        let content = std::fs::read_to_string(&self.teacher.golden_path)
+            .unwrap_or_default();
+
+        let mut scored: Vec<ScoredGolden> = content
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|line| {
+                let example: GoldenExample = serde_json::from_str(line).ok()?;
+                let score = compute_quality_score(&example);
+                Some(ScoredGolden { example, quality_score: score })
+            })
+            .collect();
+
+        // Sort descending by quality score (best first)
+        scored.sort_by(|a, b| b.quality_score.partial_cmp(&a.quality_score).unwrap_or(std::cmp::Ordering::Equal));
+
+        Ok(scored)
+    }
+
+    /// Get sleep status for the HUD / user query.
+    pub async fn status(&self) -> SleepStatus {
+        let last = self.last_sleep.lock().await;
+        let (golden, pairs) = self.teacher.get_counts();
+        let next_auto = match *last {
+            None => Some(Utc::now()), // Would sleep now if data exists
+            Some(t) => {
+                let next = t + chrono::Duration::seconds(self.config.auto_sleep_interval_secs as i64);
+                Some(next)
+            }
+        };
+
+        SleepStatus {
+            last_sleep: *last,
+            next_auto_sleep: next_auto,
+            golden_buffered: golden,
+            pairs_buffered: pairs,
+            config: self.config.clone(),
+        }
+    }
+
+    /// Generate an identity reflection by reviewing golden responses + memory.
+    /// The reflection is appended to the golden buffer as a training example.
+    async fn generate_identity_reflection(
+        &self,
+        ranked_golden: &[ScoredGolden],
+        top_n: usize,
+    ) -> Result<(), String> {
+        let provider = self.provider.as_ref()
+            .ok_or("No provider available for identity reflection")?;
+
+        // Build context from top golden responses
+        let mut context = String::from("## Your Recent Best Responses\n\n");
+        for (i, scored) in ranked_golden.iter().take(top_n).enumerate() {
+            context.push_str(&format!(
+                "### Response {} (quality: {:.1})\nUser: {}\nYou: {}\n\n",
+                i + 1,
+                scored.quality_score,
+                &scored.example.user_msg[..scored.example.user_msg.len().min(200)],
+                &scored.example.response[..scored.example.response.len().min(500)],
+            ));
+        }
+
+        // Add lessons if memory is available
+        if let Some(memory) = &self.memory {
+            let global_scope = Scope::Private { user_id: "mesh_global".to_string() };
+            let lessons = memory.lessons.read_lessons(&global_scope).await;
+            if !lessons.is_empty() {
+                context.push_str("## Your Learned Lessons\n\n");
+                for lesson in lessons.iter().take(10) {
+                    context.push_str(&format!("- {} (confidence: {:.2})\n", lesson.text, lesson.confidence));
+                }
+                context.push('\n');
+            }
+
+            // Add synaptic knowledge snapshot
+            let core_concepts = ["identity", "personality", "values", "communication", "purpose"];
+            let mut synaptic_data = Vec::new();
+            for concept in &core_concepts {
+                let results = memory.synaptic.search(concept).await;
+                if !results.is_empty() {
+                    synaptic_data.push(format!("**{}**: {}", concept, results.join(", ")));
+                }
+            }
+            if !synaptic_data.is_empty() {
+                context.push_str("## Your Core Knowledge\n\n");
+                for item in &synaptic_data {
+                    context.push_str(&format!("- {}\n", item));
+                }
+                context.push('\n');
+            }
+        }
+
+        // Build reflection prompt
+        let reflection_prompt = format!(
+            "{}\n\
+            Based on the above — your best responses, your lessons, and your core knowledge — \
+            reflect on who you are. What defines your communication style? What do you value? \
+            How do you approach problems? Write a brief, honest self-reflection in first person.",
+            context
+        );
+
+        // Call inference
+        let identity_system = crate::prompts::identity::get_persona();
+        let reflection_event = Event {
+            platform: "sleep".into(),
+            scope: Scope::Private { user_id: "sleep_reflection".into() },
+            author_name: "SleepCycle".into(),
+            author_id: "sleep".into(),
+            content: reflection_prompt.clone(),
+            timestamp: Some(Utc::now().to_rfc3339()),
+            message_index: None,
+        };
+
+        let reflection = provider.generate(
+            identity_system,
+            &[],
+            &reflection_event,
+            "",
+            None,
+            Some(512), // Keep reflection concise
+        ).await.map_err(|e| format!("Identity reflection inference failed: {}", e))?;
+
+        if reflection.trim().is_empty() {
+            return Err("Identity reflection returned empty".into());
+        }
+
+        tracing::info!("💤 [SLEEP] 🪞 Identity reflection ({} chars): {}...",
+            reflection.len(),
+            &reflection[..reflection.len().min(100)]
+        );
+
+        // Write as a golden example to the training buffer
+        let identity_example = GoldenExample {
+            ts: Utc::now().to_rfc3339(),
+            system_prompt: identity_system.to_string(),
+            user_msg: reflection_prompt,
+            agent_ctx: String::new(),
+            response: reflection,
+            tools: vec![],
+            attempts: 1, // Identity reflections are always "first pass"
+        };
+
+        if let Ok(json) = serde_json::to_string(&identity_example) {
+            if let Ok(mut file) = tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.teacher.golden_path)
+                .await
+            {
+                let _ = file.write_all(format!("{}\n", json).as_bytes()).await;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// A golden example with its computed quality score.
+#[derive(Debug)]
+struct ScoredGolden {
+    #[allow(dead_code)]
+    example: GoldenExample,
+    quality_score: f64,
+}
+
+/// Compute a quality score for a golden example.
+/// Higher = better candidate for micro-training.
+fn compute_quality_score(example: &GoldenExample) -> f64 {
+    let mut score: f64 = 1.0;
+
+    // First-pass approval (attempts == 1) is the strongest signal
+    if example.attempts == 1 {
+        score += 2.0;
+    }
+
+    // Moderate response length is better (not too short, not too long)
+    let resp_len = example.response.len();
+    if (100..=2000).contains(&resp_len) {
+        score += 1.0; // Goldilocks zone
+    } else if resp_len < 50 {
+        score -= 0.5; // Too short = probably trivial
+    }
+
+    // Tool usage indicates complex reasoning
+    if !example.tools.is_empty() {
+        score += 0.5 * example.tools.len().min(3) as f64;
+    }
+
+    // Recency bonus (parse timestamp, newer = slightly higher)
+    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&example.ts) {
+        let age_hours = (Utc::now() - ts.with_timezone(&Utc)).num_hours();
+        if age_hours < 24 {
+            score += 0.5; // Fresh examples preferred
+        }
+    }
+
+    score
+}
+
+/// Status info for HUD display or /sleep status command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepStatus {
+    pub last_sleep: Option<DateTime<Utc>>,
+    pub next_auto_sleep: Option<DateTime<Utc>>,
+    pub golden_buffered: usize,
+    pub pairs_buffered: usize,
+    pub config: SleepConfig,
+}
+
+impl std::fmt::Display for SleepStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let last = self.last_sleep
+            .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+            .unwrap_or_else(|| "never".to_string());
+        let next = self.next_auto_sleep
+            .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        write!(
+            f,
+            "💤 Last sleep: {} | Next: {} | Buffer: {} golden, {} pairs | Batch: {}, lr: {:.0e}",
+            last, next,
+            self.golden_buffered, self.pairs_buffered,
+            self.config.micro_batch_size, self.config.micro_lr,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sleep_config_defaults() {
+        let config = SleepConfig::default();
+        assert_eq!(config.micro_batch_size, 2);
+        assert_eq!(config.micro_epochs, 1);
+        assert_eq!(config.auto_sleep_interval_secs, 43200);
+        assert!((config.micro_lr - 1e-5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_quality_score_first_pass() {
+        let good = GoldenExample {
+            ts: Utc::now().to_rfc3339(),
+            system_prompt: "sys".into(),
+            user_msg: "user".into(),
+            agent_ctx: "ctx".into(),
+            response: "A".repeat(500), // Good length
+            tools: vec!["web_search".into()],
+            attempts: 1, // First pass
+        };
+
+        let bad = GoldenExample {
+            ts: Utc::now().to_rfc3339(),
+            system_prompt: "sys".into(),
+            user_msg: "user".into(),
+            agent_ctx: "ctx".into(),
+            response: "ok".into(), // Too short
+            tools: vec![],
+            attempts: 3, // Multiple retries
+        };
+
+        let good_score = compute_quality_score(&good);
+        let bad_score = compute_quality_score(&bad);
+        assert!(good_score > bad_score, "First-pass + tools + good length should score higher");
+    }
+
+    #[test]
+    fn test_sleep_report_display() {
+        let report = SleepReport {
+            version: "apis-v3-20260327".into(),
+            parent: "apis-v2-20260326".into(),
+            golden_used: 2,
+            pairs_used: 0,
+            identity_reinforced: true,
+            duration_secs: 12.5,
+            timestamp: Utc::now().to_rfc3339(),
+            quality_scores: vec![4.5, 3.0],
+        };
+        let display = format!("{}", report);
+        assert!(display.contains("apis-v3"));
+        assert!(display.contains("2 examples"));
+    }
+
+    #[tokio::test]
+    async fn test_sleep_cycle_no_data() {
+        let tmp = std::env::temp_dir().join(format!("hive_sleep_test_{}", std::process::id()));
+        let teacher = Arc::new(Teacher::new(Some(tmp.clone())));
+        let cycle = SleepCycle::new(teacher, None);
+
+        // No data = should not auto-sleep
+        assert!(!cycle.should_auto_sleep().await);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[tokio::test]
+    async fn test_sleep_status_display() {
+        let tmp = std::env::temp_dir().join(format!("hive_sleep_status_{}", std::process::id()));
+        let teacher = Arc::new(Teacher::new(Some(tmp.clone())));
+        let cycle = SleepCycle::new(teacher, None);
+
+        let status = cycle.status().await;
+        assert!(status.last_sleep.is_none());
+        let display = format!("{}", status);
+        assert!(display.contains("never"));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}

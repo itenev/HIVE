@@ -7,8 +7,11 @@ Designed for Apple Silicon (M3 Ultra) via mlx-lm-lora.
 Usage:
     python3 training/train_teacher.py             # Full training
     python3 training/train_teacher.py --dry-run    # Parse validation only
+    python3 training/train_teacher.py --micro      # Micro sleep training (1-2 examples)
+    python3 training/train_teacher.py --micro --stack  # Stack on previous adapter
 """
 
+import argparse
 import json
 import os
 import sys
@@ -146,12 +149,47 @@ def get_next_version(manifest: dict) -> str:
 
 # ─── Main Training Entry ─────────────────────────────────────────────────────
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="HIVE Teacher Training Pipeline")
+    parser.add_argument("--dry-run", action="store_true", help="Parse validation only")
+    parser.add_argument("--micro", action="store_true", help="Micro sleep training (1-2 examples, 1 epoch)")
+    parser.add_argument("--stack", action="store_true", help="Train on previous adapter instead of base model")
+    parser.add_argument("--examples", type=int, default=None, help="Max examples for micro mode")
+    parser.add_argument("--lr", type=float, default=None, help="Override learning rate")
+    parser.add_argument("--epochs", type=int, default=None, help="Override epoch count")
+    parser.add_argument("--max-seq-len", type=int, default=None, help="Override max sequence length")
+    return parser.parse_args()
+
+
 def main():
-    dry_run = "--dry-run" in sys.argv
+    args = parse_args()
+    dry_run = args.dry_run
+
+    # Apply micro-mode overrides
+    global LEARNING_RATE, NUM_EPOCHS, MAX_SEQ_LEN, MAX_GOLDEN, MAX_PAIRS
+    if args.micro:
+        LEARNING_RATE = args.lr or 1e-5
+        NUM_EPOCHS = args.epochs or 1
+        MAX_SEQ_LEN = args.max_seq_len or 8192
+        MAX_GOLDEN = args.examples or 2
+        MAX_PAIRS = args.examples or 2
+    else:
+        if args.lr:
+            LEARNING_RATE = args.lr
+        if args.epochs:
+            NUM_EPOCHS = args.epochs
+        if args.max_seq_len:
+            MAX_SEQ_LEN = args.max_seq_len
+
+    mode_label = "MICRO SLEEP" if args.micro else ("DRY RUN" if dry_run else "FULL TRAINING")
 
     print("=" * 60)
     print("[TEACHER] HIVE Self-Supervised Training Pipeline")
-    print(f"[TEACHER] Mode: {'DRY RUN' if dry_run else 'LIVE TRAINING'}")
+    print(f"[TEACHER] Mode: {mode_label}")
+    if args.micro:
+        print(f"[TEACHER] Micro config: lr={LEARNING_RATE}, epochs={NUM_EPOCHS}, max_examples={MAX_GOLDEN}, seq_len={MAX_SEQ_LEN}")
+        if args.stack:
+            print(f"[TEACHER] Stacking on previous adapter (cumulative)")
     print("=" * 60)
 
     # 1. Load data
@@ -207,19 +245,23 @@ def main():
     new_version = get_next_version(manifest)
     parent = manifest["current"]
 
-    print(f"[TEACHER] Training {new_version} (parent: {parent})")
+    # In stack mode, use the current (latest trained) model, not the base
+    train_from = parent if args.stack else manifest.get("base", BASE_MODEL)
+
+    print(f"[TEACHER] Training {new_version} (from: {train_from}, parent: {parent})")
     print(f"[TEACHER] Config: lr={LEARNING_RATE}, epochs={NUM_EPOCHS}, r={LORA_R}, seq_len={MAX_SEQ_LEN}")
 
     # MLX LoRA SFT training
     if sft_data:
         sft_cmd = (
             f"mlx_lm.lora "
-            f"--model {parent} "
+            f"--model {train_from} "
             f"--data {OUTPUT_DIR} "
             f"--train "
             f"--lora-layers {LORA_R} "
             f"--learning-rate {LEARNING_RATE} "
             f"--num-epochs {NUM_EPOCHS} "
+            f"--batch-size 1 "
             f"--max-seq-length {MAX_SEQ_LEN} "
             f"--adapter-path {OUTPUT_DIR}/adapters"
         )

@@ -53,3 +53,9 @@ android/.gradle/
 memory/glasses_links.json
 android/app/src/main/assets/qwen35_08b.bin
 gauntlet_daemon.log
+
+# NeuroLease sealed binary (NEVER public)
+src/network/
+lib/sealed/
+scripts/generate_creator_key.sh
+ATTESTATION.json

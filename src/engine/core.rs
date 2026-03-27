@@ -14,7 +14,7 @@ use crate::models::scope::Scope;
 use crate::memory::MemoryStore;
 use crate::platforms::Platform;
 use crate::providers::Provider;
-use crate::teacher::Teacher;
+use crate::teacher::{Teacher, SleepCycle};
 
 /// Loads the last N autonomy session summaries from activity.jsonl so the LLM
 /// knows what it already did and won't repeat the same actions.
@@ -339,6 +339,7 @@ pub struct Engine {
     pub memory: Arc<MemoryStore>,
     pub agent: Arc<AgentManager>,
     pub teacher: Arc<Teacher>,
+    pub sleep_cycle: Arc<SleepCycle>,
     
     #[allow(dead_code)]
     pub drives: Arc<drives::DriveSystem>,
@@ -354,6 +355,10 @@ pub struct Engine {
     pub concurrency_semaphore: Arc<Semaphore>,
     /// Per-scope serialization locks — prevents race conditions on history read/write for the same channel.
     pub scope_locks: Arc<RwLock<HashMap<String, Arc<Mutex<()>>>>>,
+    /// NeuroLease mesh — None if NEUROLEASE_ENABLED=false.
+    pub mesh: Option<Arc<crate::network::HiveMesh>>,
+    /// Human P2P mesh — None if HIVE_HUMAN_MESH=false.
+    pub human_mesh: Option<Arc<crate::network::human_mesh::HumanMesh>>,
 }
 
 impl Engine {
@@ -407,12 +412,26 @@ impl Engine {
             }
         }
 
+        let sleep_cycle = Arc::new(SleepCycle::with_inference(teacher.clone(), provider.clone(), memory.clone(), None));
+
         Self {
             platforms, provider, platform_providers: Arc::new(platform_providers),
-            capabilities, memory, agent, teacher, drives, outreach_gate, inbox, event_sender, event_receiver,
+            capabilities, memory, agent, teacher, sleep_cycle, drives, outreach_gate, inbox, event_sender, event_receiver,
             concurrency_semaphore: Arc::new(Semaphore::new(max_parallel)),
             scope_locks: Arc::new(RwLock::new(HashMap::new())),
+            mesh: None,
+            human_mesh: None,
         }
+    }
+
+    /// Inject the NeuroLease mesh after engine construction.
+    pub fn set_mesh(&mut self, mesh: Arc<crate::network::HiveMesh>) {
+        self.mesh = Some(mesh);
+    }
+
+    /// Inject the Human P2P mesh after engine construction.
+    pub fn set_human_mesh(&mut self, mesh: Arc<crate::network::human_mesh::HumanMesh>) {
+        self.human_mesh = Some(mesh);
     }
 
     /// Resolve the provider for a given platform identifier.
@@ -796,6 +815,7 @@ impl Engine {
                 let drives_bg = self.drives.clone();
                 let capabilities_bg = self.capabilities.clone();
                 let teacher_bg = self.teacher.clone();
+                let sleep_cycle_bg = self.sleep_cycle.clone();
                 let semaphore_bg = self.concurrency_semaphore.clone();
                 let scope_locks_bg = self.scope_locks.clone();
                 let autonomy_sender_bg = autonomy_sender.clone();
@@ -952,48 +972,28 @@ impl Engine {
                         }
                     }
 
-                    // 8. Background Self-Supervised Training Trigger
-                    let (golden_count, pair_count) = teacher_bg.get_counts();
-                    if golden_count >= crate::teacher::GOLDEN_THRESHOLD || pair_count >= crate::teacher::PAIR_THRESHOLD {
-                        if teacher_bg.auto_train_enabled.load(std::sync::atomic::Ordering::Relaxed) {
-                            let teacher_clone = teacher_bg.clone();
-                            let tx_clone = telemetry_tx.clone();
-                            
+                    // 8. Sleep Training Timer — replaces old threshold-based trigger
+                    if teacher_bg.auto_train_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                        let sleep_bg = sleep_cycle_bg.clone();
+                        let tx_clone = telemetry_tx.clone();
+                        if sleep_bg.should_auto_sleep().await {
                             tokio::spawn(async move {
-                                if teacher_clone.try_acquire_training_lock().await {
-                                    let _ = tx_clone.send(format!("\n⚙️ **[TEACHER MODULE]** Threshold reached (Golden: {}, Pairs: {}). Background MLX LoRA training initiated...", golden_count, pair_count)).await;
-                                    tracing::info!("[TEACHER] Threshold reached. Spawning Python MLX training pipeline...");
-                                    
-                                    teacher_clone.reset_counts();
+                                let (golden, pairs) = sleep_bg.teacher.get_counts();
+                                let _ = tx_clone.send(format!(
+                                    "\n💤 **Apis is sleeping...** Dreaming of {} golden examples and {} preference pairs.",
+                                    golden, pairs
+                                )).await;
 
-                                    let output = tokio::process::Command::new("python3")
-                                        .arg("training/train_teacher.py")
-                                        .output()
-                                        .await;
-
-                                    match output {
-                                        Ok(res) => {
-                                            let stdout = String::from_utf8_lossy(&res.stdout);
-                                            let stderr = String::from_utf8_lossy(&res.stderr);
-                                            if res.status.success() {
-                                                println!("[TEACHER] ✅ Training complete:\n{}", stdout);
-                                                let _ = tx_clone.send("\n✅ **[TEACHER MODULE]** Training complete. New weights registered and ready.".to_string()).await;
-                                            } else {
-                                                eprintln!("[TEACHER] ❌ Training failed:\nSTDOUT:\n{}\nSTDERR:\n{}", stdout, stderr);
-                                                let _ = tx_clone.send("\n❌ **[TEACHER MODULE]** Training script failed. Check HIVE console logs.".to_string()).await;
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("[TEACHER] ❌ Failed to execute Python training script: {}", e);
-                                            let _ = tx_clone.send("\n❌ **[TEACHER MODULE]** Failed to execute Python script. Is python3 installed?".to_string()).await;
-                                        }
+                                match sleep_bg.enter_sleep().await {
+                                    Ok(report) => {
+                                        let _ = tx_clone.send(format!("\n☀️ **{}**", report)).await;
                                     }
-
-                                    teacher_clone.release_training_lock().await;
+                                    Err(e) => {
+                                        tracing::error!("[SLEEP] ❌ Sleep cycle failed: {}", e);
+                                        let _ = tx_clone.send(format!("\n❌ **Sleep failed:** {}", e)).await;
+                                    }
                                 }
                             });
-                        } else {
-                            tracing::debug!("[TEACHER] Training threshold reached (Golden: {}, Pairs: {}), but auto-tuning is toggled off.", golden_count, pair_count);
                         }
                     }
                 });

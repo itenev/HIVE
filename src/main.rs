@@ -122,7 +122,7 @@ pub async fn run_app() {
 
     // 4. Build the engine with our defined platforms and injected contexts
     let glasses_provider: Arc<dyn crate::providers::Provider> = Arc::new(OllamaProvider::with_model("qwen3.5:35b"));
-    let engine = EngineBuilder::new()
+    let mut engine = EngineBuilder::new()
         .with_platform(Box::new(DiscordPlatform::new(discord_token, memory_store.clone(), Arc::new(capabilities.clone()))))
         .with_platform(Box::new(CliPlatform::new(reader)))
         .with_platform(Box::new(GlassesPlatform::new()))
@@ -131,6 +131,25 @@ pub async fn run_app() {
         .with_capabilities(capabilities)
         .build()
         .expect("Failed to build Engine");
+
+    // 4b. Initialize NeuroLease mesh (if enabled)
+    {
+        if let Some(mesh) = crate::network::HiveMesh::new() {
+            let mesh = std::sync::Arc::new(mesh);
+            mesh.start().await;
+            engine.set_mesh(mesh);
+        }
+    }
+
+    // 4c. Initialize Human P2P mesh (if enabled)
+    {
+        if let Some(mesh) = crate::network::human_mesh::HumanMesh::new() {
+            let mesh = std::sync::Arc::new(mesh);
+            mesh.start().await;
+            // Store it in the engine so tools can access it later
+            engine.set_human_mesh(mesh);
+        }
+    }
 
     // 5. Spawn the file server daemon (serves generated + downloaded files over HTTP)
     {

@@ -59,9 +59,12 @@ pub async fn execute_manage_lessons(
             });
 
             let lesson = crate::memory::lessons::Lesson {
+                id: uuid::Uuid::new_v4().to_string(),
                 text: lesson_text,
                 keywords,
                 confidence,
+                origin: "local".to_string(),
+                learned_at: chrono::Utc::now().to_rfc3339(),
             };
 
             match memory.lessons.add_lesson(&target_scope, &lesson).await {

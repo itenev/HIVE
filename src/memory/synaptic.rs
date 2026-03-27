@@ -18,6 +18,9 @@ pub struct SynapticNode {
     pub data: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// PeerId of the instance that created this node. "local" for locally-created.
+    #[serde(default = "default_synaptic_origin")]
+    pub origin: String,
 }
 
 /// A relationship between two concepts.
@@ -27,7 +30,12 @@ pub struct SynapticEdge {
     pub to: String,
     pub relation: String,
     pub created_at: String,
+    /// PeerId of the instance that created this edge. "local" for locally-created.
+    #[serde(default = "default_synaptic_origin")]
+    pub origin: String,
 }
+
+fn default_synaptic_origin() -> String { "local".to_string() }
 
 #[derive(Debug)]
 pub struct Neo4jGraph {
@@ -149,6 +157,7 @@ impl Neo4jGraph {
                 data: Vec::new(),
                 created_at: now.clone(),
                 updated_at: now.clone(),
+                origin: "local".to_string(),
             });
             // Avoid storing exact duplicates
             if !entry.data.iter().any(|d| d == data) {
@@ -244,6 +253,7 @@ impl Neo4jGraph {
                     to: to.to_string(),
                     relation: relation.to_string(),
                     created_at: now,
+                    origin: "local".to_string(),
                 });
             }
         }
