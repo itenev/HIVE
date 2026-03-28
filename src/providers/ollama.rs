@@ -278,14 +278,27 @@ impl Provider for OllamaProvider {
             }),
         };
 
+        let pre_send = tokio::time::Instant::now();
+        let prompt_bytes: usize = payload.messages.iter().map(|m| m.content.len()).sum();
+        let msg_count = payload.messages.len();
+        tracing::info!("[PROVIDER] 📤 Sending request to Ollama — {} messages, {} prompt bytes, model={}", msg_count, prompt_bytes, payload.model);
+
         let mut res = self.client.post(&self.endpoint)
             .json(&payload)
             .send()
             .await
-            .map_err(|e| ProviderError::ConnectionError(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("[PROVIDER] ❌ send() failed after {:.1}s: {}", pre_send.elapsed().as_secs_f64(), e);
+                ProviderError::ConnectionError(e.to_string())
+            })?;
 
-        if !res.status().is_success() {
-            let status = res.status();
+        let send_elapsed = pre_send.elapsed();
+        let status = res.status();
+        let content_type = res.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+        let content_length = res.headers().get("content-length").and_then(|v| v.to_str().ok()).unwrap_or("chunked").to_string();
+        tracing::info!("[PROVIDER] 📥 HTTP {} received in {:.3}s — content-type={}, content-length={}", status, send_elapsed.as_secs_f64(), content_type, content_length);
+
+        if !status.is_success() {
             let text = res.text().await.unwrap_or_default();
             return Err(ProviderError::ParseError(format!("Ollama error {}: {}", status, text)));
         }
@@ -296,25 +309,40 @@ impl Provider for OllamaProvider {
         let mut final_prompt_tokens = 0;
         let mut final_eval_tokens = 0;
         let mut ttft_duration = tokio::time::Duration::from_secs(0);
-        let prompt_bytes: usize = payload.messages.iter().map(|m| m.content.len()).sum();
         let start_time = tokio::time::Instant::now();
+        let mut total_chunks: u64 = 0;
 
         let mut chunk_retries: u8 = 0;
         loop {
             let chunk_result = res.chunk().await;
             let chunk = match chunk_result {
-                Ok(Some(c)) => c,
+                Ok(Some(c)) => {
+                    total_chunks += 1;
+                    if total_chunks == 1 {
+                        tracing::info!("[PROVIDER] 🟢 First chunk received — {:.3}s after send, {:.3}s total, {} bytes",
+                            start_time.elapsed().as_secs_f64(),
+                            pre_send.elapsed().as_secs_f64(),
+                            c.len());
+                    }
+                    c
+                },
                 Ok(None) => break, // Stream ended normally
                 Err(e) => {
                     chunk_retries += 1;
+                    let total_elapsed = pre_send.elapsed().as_secs_f64();
+                    tracing::warn!("[PROVIDER] Chunk read error (retry {}/3) — {:.3}s total elapsed, {} chunks received, {} response chars accumulated: {}",
+                        chunk_retries, total_elapsed, total_chunks, full_response.len(), e);
                     if chunk_retries >= 3 {
                         if !full_response.is_empty() {
-                            tracing::warn!("[PROVIDER] Returning partial response ({} chars) after {} chunk errors: {}", full_response.len(), chunk_retries, e);
+                            tracing::warn!("[PROVIDER] Returning partial response ({} chars, {} chunks) after {} chunk errors at {:.1}s: {}",
+                                full_response.len(), total_chunks, chunk_retries, total_elapsed, e);
                             break;
                         }
-                        return Err(ProviderError::ConnectionError(format!("Chunk read failed after {} retries: {}", chunk_retries, e)));
+                        return Err(ProviderError::ConnectionError(format!(
+                            "Chunk read failed after {} retries ({:.1}s elapsed, {} chunks received): {}",
+                            chunk_retries, total_elapsed, total_chunks, e
+                        )));
                     }
-                    tracing::warn!("[PROVIDER] Chunk read error (retry {}/3): {}", chunk_retries, e);
                     tokio::time::sleep(tokio::time::Duration::from_millis(500 * chunk_retries as u64)).await;
                     continue;
                 }
