@@ -30,8 +30,9 @@ pub trait Platform: Send + Sync {
 
     /// Send a "Continue?" checkpoint prompt and wait for user response.
     /// Returns true if user wants to continue, false if they want to wrap up.
+    /// Only the user identified by `user_id` may interact with the checkpoint.
     /// Default: always continue (for non-interactive platforms).
-    async fn ask_continue(&self, _channel_id: u64, _turn: usize) -> bool {
+    async fn ask_continue(&self, _channel_id: u64, _turn: usize, _user_id: &str) -> bool {
         true
     }
 }

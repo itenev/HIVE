@@ -530,7 +530,7 @@ impl Platform for DiscordPlatform {
     }
 
     #[cfg(not(tarpaulin_include))]
-    async fn ask_continue(&self, channel_id: u64, turn: usize) -> bool {
+    async fn ask_continue(&self, channel_id: u64, turn: usize, _user_id: &str) -> bool {
         let http_lock = self.http.lock().await;
         let http = match http_lock.as_ref() {
             Some(h) => h.clone(),

@@ -308,7 +308,7 @@ impl Platform for DiscordPlatform {
     }
 
     #[cfg(not(tarpaulin_include))]
-    async fn ask_continue(&self, channel_id: u64, turn: usize) -> bool {
+    async fn ask_continue(&self, channel_id: u64, turn: usize, user_id: &str) -> bool {
         let http_lock = self.http.lock().await;
         let http = match http_lock.as_ref() {
             Some(h) => h.clone(),
@@ -318,10 +318,10 @@ impl Platform for DiscordPlatform {
 
         let channel = serenity::model::id::ChannelId::new(channel_id);
 
-        let yes_btn = serenity::builder::CreateButton::new("continue_yes")
+        let yes_btn = serenity::builder::CreateButton::new(format!("continue_yes:{}", user_id))
             .label("✅ Continue")
             .style(serenity::model::application::ButtonStyle::Success);
-        let no_btn = serenity::builder::CreateButton::new("continue_no")
+        let no_btn = serenity::builder::CreateButton::new(format!("continue_no:{}", user_id))
             .label("🛑 Wrap Up")
             .style(serenity::model::application::ButtonStyle::Danger);
         let row = serenity::builder::CreateActionRow::Buttons(vec![yes_btn, no_btn]);
@@ -340,7 +340,7 @@ impl Platform for DiscordPlatform {
                     map.insert(msg_id, tx);
                 }
 
-                tracing::info!("[CHECKPOINT] 🐝 Sent continue prompt at turn {} (msg {})", turn, msg_id);
+                tracing::info!("[CHECKPOINT] 🐝 Sent continue prompt at turn {} (msg {}, scoped to user {})", turn, msg_id, user_id);
 
                 // Wait for user response with 5 minute timeout
                 match tokio::time::timeout(tokio::time::Duration::from_secs(300), rx).await {

@@ -130,7 +130,7 @@ pub async fn execute_react_loop(
             let platform_name = event.platform.split(':').next().unwrap_or("");
             let channel_id: u64 = event.platform.split(':').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
             if let Some(platform) = platforms.get(platform_name) {
-                let should_continue = platform.ask_continue(channel_id, current_turn - 1).await;
+                let should_continue = platform.ask_continue(channel_id, current_turn - 1, &event.author_id).await;
                 if !should_continue {
                     context_from_agent.push_str("\n[CHECKPOINT: USER CHOSE TO WRAP UP] You MUST now use `reply_to_request` to respond to the user with a summary of everything you have accomplished so far. Do NOT invoke any more tools. Respond NOW.\n\n");
                     tracing::info!("[AGENT LOOP] 🛑 User chose to wrap up at turn {}.", current_turn - 1);

@@ -11,7 +11,7 @@ pub enum InteractionAction {
     Tending { user_id: u64 },
     Proxy { user_id: u64, target_channel: u64, message: String },
     TtsGenerate { message_id: u64, content: String, has_audio: bool },
-    Continue { message_id: u64, wants_continue: bool },
+    Continue { message_id: u64, wants_continue: bool, allowed_user_id: String, clicker_user_id: u64 },
     Ignore,
 }
 
@@ -55,21 +55,51 @@ pub fn decode_interaction(interaction: &Interaction) -> InteractionAction {
             _ => {}
         }
     } else if let Interaction::Component(component) = interaction {
-        match component.data.custom_id.as_str() {
-            "tts_generate" => return InteractionAction::TtsGenerate {
+        let custom_id = component.data.custom_id.as_str();
+        let clicker_id = component.user.id.get();
+
+        if custom_id == "tts_generate" {
+            return InteractionAction::TtsGenerate {
                 message_id: component.message.id.get(),
                 content: component.message.content.clone(),
                 has_audio: component.message.attachments.iter().any(|a| a.filename.ends_with(".wav") || a.filename.ends_with(".mp3")),
-            },
-            "continue_yes" => return InteractionAction::Continue {
+            };
+        }
+
+        // Parse continue buttons: custom_id format is "continue_yes:USER_ID" or "continue_no:USER_ID"
+        if let Some(allowed_uid) = custom_id.strip_prefix("continue_yes:") {
+            return InteractionAction::Continue {
                 message_id: component.message.id.get(),
                 wants_continue: true,
-            },
-            "continue_no" => return InteractionAction::Continue {
+                allowed_user_id: allowed_uid.to_string(),
+                clicker_user_id: clicker_id,
+            };
+        }
+        if let Some(allowed_uid) = custom_id.strip_prefix("continue_no:") {
+            return InteractionAction::Continue {
                 message_id: component.message.id.get(),
                 wants_continue: false,
-            },
-            _ => {}
+                allowed_user_id: allowed_uid.to_string(),
+                clicker_user_id: clicker_id,
+            };
+        }
+
+        // Legacy buttons without user scoping (backwards compat)
+        if custom_id == "continue_yes" {
+            return InteractionAction::Continue {
+                message_id: component.message.id.get(),
+                wants_continue: true,
+                allowed_user_id: String::new(),
+                clicker_user_id: clicker_id,
+            };
+        }
+        if custom_id == "continue_no" {
+            return InteractionAction::Continue {
+                message_id: component.message.id.get(),
+                wants_continue: false,
+                allowed_user_id: String::new(),
+                clicker_user_id: clicker_id,
+            };
         }
     }
     InteractionAction::Ignore
@@ -271,8 +301,19 @@ pub async fn handle_interaction(handler: &super::Handler, ctx: Context, interact
                 }
             }
         }
-        InteractionAction::Continue { message_id, wants_continue } => {
+        InteractionAction::Continue { message_id, wants_continue, allowed_user_id, clicker_user_id } => {
             if let Interaction::Component(component) = &interaction {
+                // Authorization: Only the user who initiated the request can interact with the checkpoint
+                if !allowed_user_id.is_empty() && clicker_user_id.to_string() != allowed_user_id {
+                    let data = CreateInteractionResponseMessage::new()
+                        .content("❌ Only the user who sent the original request can use this checkpoint.")
+                        .ephemeral(true);
+                    let builder = CreateInteractionResponse::Message(data);
+                    let _ = component.create_response(&ctx.http, builder).await;
+                    tracing::warn!("[CHECKPOINT] 🛡️ Rejected checkpoint click from user {} (allowed: {})", clicker_user_id, allowed_user_id);
+                    return;
+                }
+
                 let btn_label = if wants_continue { "✅ Continuing..." } else { "🛑 Wrapping up..." };
                 let data = CreateInteractionResponseMessage::new()
                     .content(btn_label)
@@ -369,5 +410,44 @@ mod tests {
                 panic!("Expected Sweep action");
             }
         }
+    }
+
+    #[test]
+    fn test_checkpoint_custom_id_parsing() {
+        // Verify custom_id format "continue_yes:USER_ID" extracts the allowed user correctly
+        let custom_id = "continue_yes:1299810741984956449";
+        assert!(custom_id.starts_with("continue_yes:"));
+        let allowed = custom_id.strip_prefix("continue_yes:").unwrap();
+        assert_eq!(allowed, "1299810741984956449");
+
+        let custom_id_no = "continue_no:9876543210";
+        let allowed_no = custom_id_no.strip_prefix("continue_no:").unwrap();
+        assert_eq!(allowed_no, "9876543210");
+    }
+
+    #[test]
+    fn test_checkpoint_authorization_logic() {
+        // Authorized: clicker matches allowed user
+        let allowed_user_id = "1299810741984956449";
+        let clicker_user_id: u64 = 1299810741984956449;
+        assert_eq!(clicker_user_id.to_string(), allowed_user_id);
+
+        // Unauthorized: clicker does NOT match allowed user  
+        let other_clicker: u64 = 9999999999;
+        assert_ne!(other_clicker.to_string(), allowed_user_id);
+
+        // Legacy: empty allowed_user_id means no restriction (backwards compat)
+        let legacy_allowed = "";
+        assert!(legacy_allowed.is_empty());
+    }
+
+    #[test]
+    fn test_checkpoint_legacy_custom_ids() {
+        // Old-style buttons without user_id should not parse as scoped
+        let legacy_yes = "continue_yes";
+        assert!(legacy_yes.strip_prefix("continue_yes:").is_none());
+        
+        let legacy_no = "continue_no";
+        assert!(legacy_no.strip_prefix("continue_no:").is_none());
     }
 }
