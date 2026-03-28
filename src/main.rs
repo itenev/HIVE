@@ -121,7 +121,9 @@ pub async fn run_app() {
     };
 
     // 4. Build the engine with our defined platforms and injected contexts
-    let glasses_provider: Arc<dyn crate::providers::Provider> = Arc::new(OllamaProvider::with_model("qwen3.5:35b"));
+    let glasses_model = std::env::var("HIVE_GLASSES_MODEL").unwrap_or_else(|_| "qwen3.5:35b".into());
+    tracing::info!("[PROVIDER] Glasses platform using model: {} (set HIVE_GLASSES_MODEL to override)", glasses_model);
+    let glasses_provider: Arc<dyn crate::providers::Provider> = Arc::new(OllamaProvider::with_model(&glasses_model));
     let mut engine = EngineBuilder::new()
         .with_platform(Box::new(DiscordPlatform::new(discord_token, memory_store.clone(), Arc::new(capabilities.clone()))))
         .with_platform(Box::new(CliPlatform::new(reader)))

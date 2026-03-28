@@ -902,6 +902,7 @@ impl Engine {
                         platforms_bg.clone(), event.platform.clone(), event.scope.clone(),
                     );
 
+
                     let (response_text, _current_turn, _completed_tools) = crate::engine::react::execute_react_loop(
                         &event,
                         &history,

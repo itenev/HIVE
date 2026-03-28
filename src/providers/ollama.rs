@@ -113,9 +113,11 @@ pub struct OllamaProvider {
 }
 
 impl OllamaProvider {
-    /// Connects to a local Ollama instance defaulting to `qwen3.5:35b` as requested.
+    /// Connects to a local Ollama instance.
+    /// Model defaults to `qwen3.5:35b` but can be overridden via `HIVE_MODEL` env var.
     pub fn new() -> Self {
-        Self::with_model("qwen3.5:35b")
+        let model = std::env::var("HIVE_MODEL").unwrap_or_else(|_| "qwen3.5:35b".into());
+        Self::with_model(&model)
     }
 
     /// Creates an OllamaProvider targeting a specific model.
@@ -190,24 +192,16 @@ impl Provider for OllamaProvider {
                 content
             };
 
-            // ─── VISION CACHE: Attach cached image bytes for history messages ───
-            // Without this, history messages lose their image pixels and the model
-            // can only see the text tag `[USER_ATTACHMENT: ...]` — not the actual image.
-            let cached_images = {
-                let image_urls = vision_cache::extract_image_urls(&capped_content);
-                let mut cached = Vec::new();
-                for url in &image_urls {
-                    if let Some(b64) = vision_cache::load(url).await {
-                        cached.push(b64);
-                    }
-                }
-                if cached.is_empty() { None } else { Some(cached) }
-            };
-
+            // History messages never carry image bytes. The model already processed
+            // each image on the turn it was sent (via current-event attachment below).
+            // Re-attaching cached bytes to every historical message on every call
+            // caused JPEG format crashes, stream corruption, and 5x latency spikes.
+            // The text metadata [USER_ATTACHMENT: ...] is preserved so the model
+            // still knows images were exchanged.
             messages.push(OllamaMessage {
                 role: role.to_string(),
                 content: capped_content,
-                images: cached_images,
+                images: None,
             });
         }
 

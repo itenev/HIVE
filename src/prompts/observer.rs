@@ -165,13 +165,13 @@ pub async fn run_skeptic_audit(
     match result {
         Ok(text) => AuditResult::parse_verdict(&text),
         Err(e) => {
-            eprintln!("Observer LLM Error: {:?}", e);
+            tracing::warn!("[OBSERVER] ⚠️ Audit skipped — provider infrastructure error: {:?}. Fail-open: ALLOWING response.", e);
             AuditResult {
-                verdict: "BLOCKED".to_string(),
+                verdict: "ALLOWED".to_string(),
                 failure_category: "none".to_string(),
                 what_worked: "N/A".to_string(),
-                what_went_wrong: format!("Audit failed due to provider error or timeout: {}", e),
-                how_to_fix: "The internal LLM Observer timed out or crashed while validating your response. Please generate a shorter, simpler response without complex formatting.".to_string()
+                what_went_wrong: format!("Audit skipped due to provider infrastructure error (fail-open): {}", e),
+                how_to_fix: "No action needed — response was allowed without audit due to provider error.".to_string(),
             }
         }
     }
@@ -284,7 +284,9 @@ mod tests {
 
         let caps = AgentCapabilities::default();
         let res = run_skeptic_audit(Arc::new(mock_provider), &caps, "My candidate", "System", &[], &event, "").await;
-        assert_eq!(res.verdict, "BLOCKED");
+        // Provider errors are infrastructure failures, not content violations.
+        // The observer should fail-open (ALLOW) to prevent infinite block loops.
+        assert_eq!(res.verdict, "ALLOWED");
         assert!(res.what_went_wrong.contains("fail"));
     }
 
