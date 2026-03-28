@@ -32,6 +32,8 @@ RUN cargo clean && cargo build --release
 FROM ${RUNTIME_BASE} AS runtime
 
 # Install Ollama dependencies + curl for healthchecks + CA certs for HTTPS
+# + google-chrome-stable for headless_chrome PDF generation
+# + gosu for privilege drop inside entrypoint (safer than su)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -40,7 +42,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     zstd \
     lsof \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
+
+# Install chrome via direct deb download + dpkg (avoids apt repo GPG key issues)
+# Resolve deps after so apt handles the dependency chain properly.
+RUN curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+    apt-get update && apt-get install -y /tmp/chrome.deb --no-install-recommends && \
+    rm /tmp/chrome.deb && \
+    rm -rf /var/lib/apt/lists/*
+
+# Tell headless_chrome where to find chrome (auto-detect fails in containers)
+ENV CHROME=/usr/bin/google-chrome-stable
 
 # Install Ollama
 RUN curl -fsSL https://ollama.ai/install.sh | sh
@@ -71,8 +84,6 @@ RUN mkdir -p /ollama-models && chown -R hive:hive /ollama-models
 # Entrypoint script (see entrypoint.sh)
 COPY deployment/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh && chown hive:hive /app/entrypoint.sh
-
-USER hive
 
 EXPOSE 11434
 

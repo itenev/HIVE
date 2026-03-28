@@ -10,7 +10,8 @@ isolated from your local network via a firewall rule.
 
 ## Prerequisites
 
-- Docker 24+ with Compose v2 (`docker compose`, not `docker-compose`)
+- Docker 24+ with Compose v2 (`docker compose`, not `docker-compose`). Docker 27+
+  includes buildx as a built-in — no separate plugin install needed.
 - Enough RAM for your chosen model (qwen3.5:9b ≈ 6 GB; qwen3:32b Q4 ≈ 24 GB)
 - Linux host strongly recommended; macOS works but the firewall step differs
 
@@ -63,7 +64,7 @@ HIVE/
 │   ├── Dockerfile             ← multi-stage build (Rust + runtime)
 │   ├── docker-compose.yml     ← base config (CPU-only)
 │   ├── docker-compose.gpu.yml ← GPU overlay (CUDA + NVIDIA passthrough)
-│   ├── entrypoint.sh          ← startup script (Ollama + HIVE)
+│   ├── entrypoint.sh          ← startup script (Ollama → warmup → fix perms → HIVE)
 │   ├── .env                   ← your secrets (gitignored)
 │   ├── setup_firewall.sh      ← optional LAN isolation helper
 │   └── DEPLOYMENT.md          ← this file
@@ -312,7 +313,7 @@ docker compose exec hive cat /app/memory/core/tunnel_url.txt
 | LAN isolated                      | ✅*    | After Step 3 firewall rule                    |
 | Runs as non-root                 | ✅     | `hive` user inside container                  |
 | No privilege escalation          | ✅     | `no-new-privileges:true`                      |
-| All Linux caps dropped           | ✅     | Only NET_BIND_SERVICE retained for Ollama     |
+| All Linux caps dropped           | ✅     | NET_BIND_SERVICE, CHOWN, DAC_OVERRIDE, SETUID, SETGID retained |
 | Resource limits enforced         | ✅     | Memory + CPU caps in compose file             |
 | Internet access (Discord, search)| ✅     | Required for core functionality               |
 | Cloudflare quick tunnel          | ✅     | Auto-starts on port 8420                     |
@@ -355,6 +356,29 @@ manually first:
 ```bash
 docker compose run --rm hive ollama pull qwen3:32b
 ```
+
+**Chrome not found for PDF generation (`"Could not auto detect a chrome executable"`):**
+The container installs Google Chrome Stable via direct `.deb` download. The
+`CHROME=/usr/bin/google-chrome-stable` env var tells `headless_chrome` where to
+find it — auto-detection fails inside containers. If you see this warning, verify
+Chrome is installed:
+
+```bash
+docker compose exec hive which google-chrome-stable
+```
+
+**Permission denied / Operation not permitted on startup:**
+If the entrypoint fails with `chown: Operation not permitted` or
+`error: failed switching to "hive": operation not permitted`, the container is
+missing required Linux capabilities. The `cap_drop ALL` in docker-compose.yml
+is intentionally strict — the entrypoint needs these caps to work:
+
+- `CHOWN` — fix ownership of named volumes (root-owned by default)
+- `DAC_OVERRIDE` — execute files owned by the `hive` user
+- `SETUID` / `SETGID` — `gosu` privilege drop from root to `hive`
+
+All four are set in the default docker-compose.yml. If you've customized the
+capabilities, ensure they're included.
 
 **Cloudflare tunnel not connecting:** The tunnel process retries every 30 seconds.
 If it shows "cloudflared not found", verify the binary was installed correctly in

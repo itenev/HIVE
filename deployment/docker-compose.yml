@@ -45,7 +45,11 @@ services:
     cap_drop:
       - ALL
     cap_add:
-      - NET_BIND_SERVICE    # needed by Ollama to bind its port
+      - NET_BIND_SERVICE
+      - CHOWN           # needed by entrypoint to fix volume ownership
+      - DAC_OVERRIDE    # needed to execute files
+      - SETUID          # needed by gosu to switch to hive user
+      - SETGID          # needed by gosu to switch to hive group
 
     security_opt:
       - no-new-privileges:true   # prevents sudo / setuid escalation
