@@ -13,9 +13,10 @@ echo "  Models: $MODEL_DIR"
 
 # ─── Parallelism — must be set before ollama serve starts ────────────────────
 # Mirrors the logic in start_hive.sh: all three vars set together.
-export OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-16}"
+export OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}"
 export OLLAMA_MAX_QUEUE="${OLLAMA_MAX_QUEUE:-32}"
-export HIVE_MAX_PARALLEL="${HIVE_MAX_PARALLEL:-16}"
+export OLLAMA_KV_CACHE_TYPE="${OLLAMA_KV_CACHE_TYPE:-q4_0}"
+export HIVE_MAX_PARALLEL="${HIVE_MAX_PARALLEL:-2}"
 
 # ─── Start Ollama in background ───────────────────────────────────────────────
 OLLAMA_MODELS="$MODEL_DIR" ollama serve &

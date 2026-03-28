@@ -10,9 +10,15 @@ services:
       - .env             # DISCORD_TOKEN, BRAVE_SEARCH_API_KEY, etc.
     environment:
       HIVE_MODEL: ${HIVE_MODEL:-qwen3.5:9b} 
-      OLLAMA_NUM_PARALLEL: "16"
+      # Ollama parallelism — qwen35 doesn't support parallel requests, so set to 1.
+      # Higher values reserve GPU memory for slots that can never be used.
+      OLLAMA_NUM_PARALLEL: "1"
       OLLAMA_MAX_QUEUE: "32"
-      HIVE_MAX_PARALLEL: "16"
+      # KV cache quantization — reduces GPU memory usage (~1 GB savings on 6 GB cards).
+      # Options: f16 (default), q4_0, q4_1, q8_0, q5_0, q5_1
+      OLLAMA_KV_CACHE_TYPE: "q4_0"
+      # Flash attention is enabled by default in Ollama 0.1.17+
+      HIVE_MAX_PARALLEL: "2"
       HIVE_PYTHON_BIN: /usr/bin/python3
       RUST_LOG: info
 
