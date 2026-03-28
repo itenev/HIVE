@@ -2,6 +2,7 @@ pub mod kernel;
 pub mod identity;
 pub mod hud;
 pub mod observer;
+pub mod genesis;
 
 use crate::models::scope::Scope;
 use crate::memory::MemoryStore;
@@ -18,10 +19,11 @@ impl SystemPromptBuilder {
 
         let kernel_string = kernel::get_laws();
         let identity_string = identity::get_persona();
+        let genesis_string = genesis::get_genesis();
 
         // Observer is NOT concatenated here; it runs as a separate 1:1 interceptor hook.
-        // The core system prompt is just HUD + KERNEL + IDENTITY.
-        format!("{}\n\n{}\n\n{}", hud_string, kernel_string, identity_string)
+        // The core system prompt is HUD + KERNEL + GENESIS + IDENTITY.
+        format!("{}\n\n{}\n\n{}\n\n{}", hud_string, kernel_string, genesis_string, identity_string)
     }
 }
 
@@ -39,6 +41,7 @@ mod tests {
         assert!(prompt.contains("Apis HUD"));
         assert!(prompt.contains("Kernel Laws"));
         assert!(prompt.contains("Identity Core"));
+        assert!(prompt.contains("Genesis"));
     }
 
     #[tokio::test]

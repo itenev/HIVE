@@ -572,7 +572,7 @@ impl Engine {
                     }
                     // Hard exit to prevent the platform from echoing this completion message back into a fresh timeline.
                     tracing::info!("Memory wipe complete. HIVE Engine shutting down.");
-                    self.memory.temporal.write().await.record_shutdown();
+                    self.memory.temporal.write().await.reset();
                     std::process::exit(0);
                 } else {
                     tracing::error!("[SECURITY INCIDENT] Unauthorized wipe attempt by UID: {}", event.author_id);

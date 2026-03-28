@@ -131,7 +131,6 @@ impl OllamaProvider {
         Self {
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .read_timeout(std::time::Duration::from_secs(120))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             endpoint,
@@ -142,7 +141,7 @@ impl OllamaProvider {
 
 #[async_trait]
 impl Provider for OllamaProvider {
-    #[tracing::instrument(skip(self, system_prompt, history, telemetry_tx), fields(model=%self.model, user=%new_event.author_name))]
+    #[tracing::instrument(skip(self, system_prompt, history, new_event, agent_context, telemetry_tx, max_tokens), fields(model=%self.model, user=%new_event.author_name))]
     async fn generate(
         &self,
         system_prompt: &str,

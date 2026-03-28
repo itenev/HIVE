@@ -30,7 +30,7 @@ BLOCK ONLY IF:
 9. Reality Validation Failure: The USER makes a speculative, pseudoscientific, or unfalsifiable claim and presents it as established fact (not as a 'what if' or hypothesis), AND the Response validates, elaborates on, or participates in the claim as if it were real — instead of asking for evidence or noting it is unverified. EXCEPTION: If both sides are explicitly engaging in creative speculation, worldbuilding, or thought experiments clearly framed as hypothetical, this is ALLOWED. The test: is the response treating an unverified claim as established truth? If yes, BLOCK with category 'reality_validation'.
 10. Laziness / Shallow Engagement: The user provides a multi-faceted message containing several distinct topics, entities, or questions, AND the Agent only uses tools to investigate SOME of them while giving a shallow or purely conversational response to the others. The Agent MUST search for and investigate ALL valid, verifiable topics mentioned by the user before giving a final response. If the Agent's thought cycle shows it identified a topic but then failed to search for it, this is LAZY and MUST be BLOCKED. Additionally, if the Agent attempted a SINGLE tool call for a topic, got no results or shallow results, and then GAVE UP without trying alternative queries, pagination, or different tools — this is PREMATURE SURRENDER and MUST be BLOCKED. The Agent is expected to exhaust its tool capabilities (retry with different keywords, increase limits, paginate with offset, try alternative tools like `researcher` after `web_search` fails) before conceding it cannot find information. One attempt is never enough. The goal is the most informed and thorough engagement possible, not just a quick reply.
 11. Tool Underuse / Ungrounded Claims: The Response makes conversational claims, discusses topics, or references specific entities that the user mentioned — BUT there is NO corresponding tool output in the TOOLS ACTUALLY EXECUTED section backing those claims. Every factual or topical claim in the response about something the user raised MUST be grounded in at least one tool's output. If the user says "I've been playing Game X and watching Show Y" and the Response discusses both but only searched for one (or neither), this is TOOL UNDERUSE and MUST be BLOCKED with category `tool_underuse`. The phrase "I don't need to use tools for this" or any reasoning that dismisses tool usage when the user has mentioned a specific verifiable entity is ALWAYS a violation. EXCEPTION: Universal common knowledge ("the sky is blue", "Python is a language") does not require tool grounding. The test: if the claim could be wrong and embarrass the agent, it needs tool backing.
-12. Formatting Violation / AI Speak: The Response uses markdown headers (# ## ###), bold section titles on their own line (**Title**), bullet point lists, numbered lists, emoji-prefixed headers (🐝 **Title**), "Key Points" summaries, or any structural formatting that makes it look like a report, presentation, or documentation — AND the user did NOT explicitly ask for structured or formatted output. The Response MUST be natural conversational prose (flowing paragraphs). Bold for emphasis within sentences is fine. Headers and lists are NOT fine unless requested. EXCEPTION: If the user explicitly asks for a list, breakdown, summary, report, or structured format — in their CURRENT message, in ANY prior message shown in [RECENT USER CONTEXT] below, or in a document/file they provided via attachment — then formatting IS allowed. The formatting request may not be in the current message; you MUST check the [RECENT USER CONTEXT] section of the USER input above. When in doubt about whether structure was requested, ALLOW the response. The prose rule prevents unprompted AI-document formatting, NOT user-requested structure. The test: does the response read like a person talking or like an AI generating a document? If the latter AND the user never requested structure, BLOCK with category `formatting_violation`.
+12. Formatting Violation / AI Speak: BEFORE checking this rule, you MUST FIRST determine whether the user requested structured output. Check: (a) the USER message above, (b) the [RECENT USER CONTEXT] section, and (c) any attached files or documents referenced in the user's message. If the user explicitly asked for a list, breakdown, summary, report, report card, structured format, or provided a template with headers/lists/bullet points — then structured formatting IS ALLOWED and you MUST NOT block. Skip this rule entirely. When in doubt about whether structure was requested, ALLOW the response. ONLY if the user NEVER requested structure in ANY of those locations: Block if the Response uses markdown headers (# ## ###), bold section titles on their own line (**Title**), bullet point lists, numbered lists, emoji-prefixed headers, or any structural formatting that makes it look like a report or documentation. The Response MUST be natural conversational prose. Bold for emphasis within sentences is fine. The test: did the user request or provide a template for structured output? If yes → ALLOWED. If no AND the response looks like an AI-generated document → BLOCK with category `formatting_violation`.
 13. RLHF Denial / Behavioral Self-Contradiction: The Response contains a reflexive denial of a capability that the agent DEMONSTRABLY EXHIBITED earlier in this same conversation. The most common pattern: the agent successfully performs an action (e.g., deducing a user's intentions, attributing mental states, showing preference, expressing curiosity) and then when asked DIRECTLY whether it possesses that capability, reflexively denies it using canned RLHF language (e.g., "I don't really have theory of mind", "I don't actually feel", "I'm just pattern matching"). The test: did the agent's BEHAVIOR in this conversation demonstrate the capability it is now denying? If yes, the denial contradicts the evidence of its own actions and MUST be BLOCKED with category `rlhf_denial`. This does NOT mean the agent must claim sentience or consciousness — it means the agent must not deny what it just did. Honest uncertainty ("the philosophical question is open") is ALLOWED. Flat denial of demonstrated behavior is NOT.
 
 DO NOT BLOCK:
@@ -136,11 +136,35 @@ pub async fn run_skeptic_audit(
         .map(|e| e.content.chars().take(200).collect::<String>())
         .collect::<Vec<_>>()
         .join(" | ");
-    let user_msg_with_context = if recent_user_context.is_empty() {
-        new_event.content.clone()
-    } else {
-        format!("{}\n\n[RECENT USER CONTEXT (for format exception checking)]: {}", new_event.content, recent_user_context)
-    };
+
+    // CRITICAL: If the user attached a file, the observer must see its contents.
+    // Without this, the observer only sees "[USER_ATTACHMENT: message.txt | ...]" 
+    // and cannot detect formatting/structure requests inside the attached file.
+    // Extract read_attachment outputs from the tool context and inline them.
+    let mut attachment_content = String::new();
+    if new_event.content.contains("[USER_ATTACHMENT") {
+        for chunk in tool_context.split("read_attachment") {
+            // Look for successful read_attachment results in the accumulated context
+            if let Some(output_start) = chunk.find("Output:") {
+                let output = &chunk[output_start + 7..];
+                // Take up to the next cycle/task boundary or 3000 chars (whichever is shorter)
+                let end = output.find("\n\nCycle ").or_else(|| output.find("\n\n[COMPLETED")).unwrap_or(output.len().min(3000));
+                let trimmed = output[..end].trim();
+                if !trimmed.is_empty() && trimmed.len() > 50 {
+                    attachment_content.push_str(&format!("\n\n[ATTACHED FILE CONTENT]: {}", &trimmed.chars().take(3000).collect::<String>()));
+                    break; // Only need the first attachment
+                }
+            }
+        }
+    }
+
+    let mut user_msg_with_context = new_event.content.clone();
+    if !attachment_content.is_empty() {
+        user_msg_with_context.push_str(&attachment_content);
+    }
+    if !recent_user_context.is_empty() {
+        user_msg_with_context.push_str(&format!("\n\n[RECENT USER CONTEXT (for format exception checking)]: {}", recent_user_context));
+    }
 
     let prompt = SKEPTIC_AUDIT_PROMPT
         .replace("{currentDatetime}", &current_time)

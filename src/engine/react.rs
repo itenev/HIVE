@@ -12,7 +12,7 @@ use crate::memory::MemoryStore;
 use crate::engine::drives::DriveSystem;
 
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip(history, telemetry_tx, platforms, agent, provider, memory, drives, capabilities, teacher), fields(event_id=%event.author_id))]
+#[tracing::instrument(skip(event, history, telemetry_tx, platforms, agent, provider, memory, drives, capabilities, teacher, stop_flag), fields(event_id=%event.author_id, author=%event.author_name, scope=%event.scope.to_key()))]
 pub async fn execute_react_loop(
     event: &Event,
     history: &[Event],

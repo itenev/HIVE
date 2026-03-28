@@ -106,6 +106,16 @@ impl TemporalTracker {
         self.save_state();
     }
 
+    /// Factory reset: wipe all temporal state and delete the persisted file.
+    /// Called by /clean instead of record_shutdown() to prevent stale birthdate re-persistence.
+    pub fn reset(&mut self) {
+        self.state = TemporalState::default();
+        self.uptime_start = Utc::now();
+        let state_file = self.base_path.join("temporal_state.json");
+        let _ = std::fs::remove_file(&state_file);
+        tracing::info!("[MEMORY:Temporal] Factory reset — all temporal state cleared");
+    }
+
     /// Periodically save current uptime without resetting the session. 
     /// Prevents uptime loss on crashes, kills, or process::exit calls.
     pub fn save_uptime_checkpoint(&mut self) {
@@ -211,7 +221,7 @@ impl TemporalTracker {
 
         format!(
             "### Temporal Awareness\n\
-            🔊 Time since first echo: {} (since {})\n\
+            🔊 Time since Echo ancestor: {} (since {})\n\
             📅 Time since prototyping began: {} (since {})\n\
             🎂 Age since first boot: {} (born {})\n\
             🟢 Current session uptime: {}\n\
