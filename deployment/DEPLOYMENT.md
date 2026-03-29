@@ -84,57 +84,16 @@ cp deployment/.env deployment/.env
 nano deployment/.env
 ```
 
-**Required:**
+**All documented env vars are listed in `.env` with their defaults.** Only uncomment
+and set values that differ from the defaults for your deployment.
+
+**Required (no defaults):**
 
 ```env
-# Discord bot token (from Developer Portal)
-DISCORD_TOKEN=your_discord_bot_token_here
-
-# Comma-separated Discord User IDs with admin access.
-# Admins can use /clean, /sweep, /stop, admin-only tools, and DM the bot directly.
-# local_admin (CLI) and apis_autonomy (autonomy loop) are always added automatically.
-HIVE_ADMIN_USERS=your_discord_user_id_here
-
-# Discord channel the bot listens to for public messages.
-# The bot responds to messages in this channel + DMs from admins + @mentions.
-HIVE_TARGET_CHANNEL=your_channel_id_here
-```
-
-**Strongly recommended:**
-
-```env
-# Ollama model for main inference (see Step 2 for options)
-HIVE_MODEL=qwen3.5:9b
-
-# Model for Glasses platform (if using Meta Ray-Ban smart glasses)
-HIVE_GLASSES_MODEL=qwen3.5:9b
-```
-
-**Optional:**
-
-```env
-# Enables web_search tool
-BRAVE_SEARCH_API_KEY=your_brave_api_key_here
-
-# Ollama endpoint (default: http://localhost:11434)
-# Change if running Ollama on a different host/port
-HIVE_OLLAMA_URL=http://localhost:11434
-
-# Glasses WebSocket port (default: 8421)
-# HIVE_GLASSES_PORT=8421
-
-# Glasses auth token — clients must include ?token=<this> to connect
-# Leave unset for dev mode (accepts all connections)
-# HIVE_GLASSES_TOKEN=your_secret_token
-
-# File server port (default: 8420)
-# HIVE_FILE_SERVER_PORT=8420
-
-# File server auth token (recommended for production)
-# HIVE_FILE_TOKEN=your_file_token_here
-
-# Python binary path (default: python3)
-# HIVE_PYTHON_BIN=python3
+DISCORD_TOKEN=your_d...here                    # Discord bot token
+HIVE_ADMIN_USERS=your_discord_user_id_here     # Comma-separated admin user IDs
+HIVE_CHAT_CHANNEL=your_listen_channel_id       # Channel Apis listens to
+HIVE_TARGET_CHANNEL=your_post_channel_id       # Channel Apis posts events to
 ```
 
 > **Do NOT commit `.env` to git.** The `.gitignore` excludes it automatically.
@@ -144,13 +103,15 @@ HIVE_OLLAMA_URL=http://localhost:11434
 ## Step 2 — Choose your model
 
 Set `HIVE_MODEL` in your `.env`. The entrypoint pulls it automatically on first start.
+Upstream default: `qwen3.5:35b`.
 
-| Model           | RAM / VRAM needed | Notes                                   |
+| Model           | RAM / VRAM needed | Notes                                    |
 |-----------------|-------------------|-----------------------------------------|
-| `qwen3.5:4b`    | ~4 GB             | Recommended for 6 GB GPU (RTX 2060)     |
-| `qwen3.5:9b`    | ~6 GB             | Default. Needs 8+ GB VRAM or fast CPU   |
+| `qwen3.5:4b`    | ~4 GB             | Recommended for 6 GB GPU (RTX 2060)      |
+| `qwen3.5:9b`    | ~6 GB             | Needs 8+ GB VRAM or fast CPU            |
+| `qwen3.5:35b`   | ~22 GB            | Upstream default. Needs 24 GB+ VRAM     |
 | `qwen3:14b`     | ~12 GB            | Better reasoning, needs 16 GB+          |
-| `qwen3:8b`      | ~6 GB             | Fast, works on 8 GB machines            |
+| `qwen3:8b`      | ~6 GB             | Fast, works on 8 GB machines             |
 | `qwen3:32b`     | ~24 GB            | Best quality, needs 24 GB+              |
 | `llama3.2:3b`   | ~2 GB             | Lightweight testing only                 |
 
@@ -278,29 +239,88 @@ docker compose exec hive cat /app/memory/core/tunnel_url.txt
 
 ## Environment variables reference
 
+> **All vars are listed in `docker-compose.yml` with upstream defaults.**
+> Copy `.env` and override only the values you need to change.
+> Vars marked with `[NEW]` are added to the compose template but not in the upstream `.env.example`.
+
+### Discord
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DISCORD_TOKEN` | Yes | — | Discord bot token |
 | `HIVE_ADMIN_USERS` | Yes | — | Comma-separated admin Discord user IDs |
-| `HIVE_TARGET_CHANNEL` | Yes | — | Discord channel for public messages |
-| `HIVE_MODEL` | No | `qwen3.5:9b` | Main Ollama model |
+| `HIVE_CHAT_CHANNEL` | Yes | — | Channel Apis listens to for public messages |
+| `HIVE_TARGET_CHANNEL` | Yes | — | Channel Apis posts autonomy events to |
+
+### Model & Provider
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `HIVE_MODEL` | No | `qwen3.5:35b` | Main inference model |
 | `HIVE_GLASSES_MODEL` | No | `qwen3.5:35b` | Glasses platform model |
-| `HIVE_OLLAMA_URL` | No | `http://localhost:11434` | Ollama endpoint |
-| `OLLAMA_NUM_PARALLEL` | No | `16` | Ollama parallelism |
-| `OLLAMA_MAX_QUEUE` | No | `32` | Ollama max queue |
-| `HIVE_MAX_PARALLEL` | No | `16` | HIVE max concurrent ReAct loops |
-| `HIVE_PYTHON_BIN` | No | `python3` | Python binary for image generation |
-| `RUST_LOG` | No | `info` | Log verbosity |
-| `BRAVE_SEARCH_API_KEY` | No | — | Enables web search |
+| `HIVE_PROVIDER` [NEW] | No | `ollama` | Provider: `ollama`, `openai`, `anthropic`, `gemini`, `xai` |
+| `HIVE_OLLAMA_URL` | No | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_HOST` [NEW] | No | `http://localhost:11434` | Alias for `HIVE_OLLAMA_URL` (some subsystems) |
+
+### Ollama Runtime (consumed by Ollama server inside container)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OLLAMA_NUM_PARALLEL` | No | `1` | Ollama parallelism. Set to `1` for models without parallel support |
+| `OLLAMA_MAX_QUEUE` | No | `32` | Ollama request queue depth |
+| `OLLAMA_KV_CACHE_TYPE` | No | (none/f16) | KV cache quantization: `q4_0`, `q8_0`, `f16`, etc. |
+
+### HIVE Core
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `HIVE_MAX_PARALLEL` | No | `2` | Max concurrent ReAct loops |
+| `HIVE_PYTHON_BIN` | No | `python3` | Python binary for image generation / training |
+| `RUST_LOG` | No | `info` | Log level: `error`, `warn`, `info`, `debug`, `trace` |
+
+### Sleep Training
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `HIVE_SLEEP_BATCH` [NEW] | No | `2` | Micro-batch size for identity reflection |
+| `HIVE_SLEEP_INTERVAL` [NEW] | No | `43200` | Auto-sleep interval in seconds (43200 = 12 h) |
+| `HIVE_SLEEP_LR` [NEW] | No | `1e-5` | Micro-training learning rate |
+
+### Identity & Networking
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `HIVE_USER_NAME` [NEW] | No | `anonymous` | Display name for P2P human mesh |
+| `HIVE_HUMAN_MESH` [NEW] | No | (disabled) | Enable P2P mesh — set to `true` to enable |
+| `HIVE_HUMAN_MESH_PORT` [NEW] | No | `9877` | P2P mesh listen port |
+| `OUTREACH_CHANNEL_ID` [NEW] | No | — | Enable outbound message routing to this channel |
+
+### Paths & Ports
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `HIVE_CACHE_DIR` [NEW] | No | `memory/cache/images` | Image cache directory |
 | `HIVE_FILE_SERVER_PORT` | No | `8420` | File server HTTP port |
-| `HIVE_FILE_TOKEN` | No | (none) | File server auth token |
-| `HIVE_GLASSES_PORT` | No | `8421` | Glasses WebSocket port |
-| `HIVE_GLASSES_TOKEN` | No | (none) | Glasses auth token |
-| `HIVE_PROVIDER` | No | `ollama` | LLM provider: `ollama`, `openai`, `anthropic`, `gemini`, `xai` |
-| `ANTHROPIC_API_KEY` | If using | — | Anthropic API key |
-| `OPENAI_API_KEY` | If using | — | OpenAI API key |
-| `GEMINI_API_KEY` | If using | — | Google Gemini API key |
-| `XAI_API_KEY` | If using | — | xAI API key |
+| `HIVE_FILE_TOKEN` | No | (dev mode) | File server auth token |
+
+### Smart Home & Email
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SMART_HOME_URL` [NEW] | No | — | Philips Hue / OpenHue bridge URL |
+| `SMART_HOME_TOKEN` [NEW] | No | — | Smart home auth token |
+| `IMAP_HOST/PORT/USER/PASS` [NEW] | No | — | IMAP inbound email |
+| `SMTP_HOST/PORT/USER/PASS` [NEW] | No | — | SMTP outbound email |
+
+### Provider API Keys
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `BRAVE_SEARCH_API_KEY` | No | — | Enables web search tool |
+| `ANTHROPIC_API_KEY` | If using | — | Required if `HIVE_PROVIDER=anthropic` |
+| `OPENAI_API_KEY` | If using | — | Required if `HIVE_PROVIDER=openai` |
+| `GEMINI_API_KEY` | If using | — | Required if `HIVE_PROVIDER=gemini` |
+| `XAI_API_KEY` | If using | — | Required if `HIVE_PROVIDER=xai` |
 
 ---
 
