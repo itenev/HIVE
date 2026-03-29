@@ -23,55 +23,53 @@ services:
       - .env
     environment:
       # ── Model ────────────────────────────────────────────────────────────────
-      # Inference model for main HIVE agent. Default: qwen3.5:35b.
+      # Inference model for main HIVE agent.
       HIVE_MODEL:            ${HIVE_MODEL:-qwen3.5:35b}
-      # Glasses platform model (Meta Ray-Ban smart glasses). Default: qwen3.5:35b.
+      # Glasses platform model (Meta Ray-Ban smart glasses).
       HIVE_GLASSES_MODEL:    ${HIVE_GLASSES_MODEL:-qwen3.5:35b}
       # LLM provider backend. Options: ollama, openai, anthropic, gemini, xai.
-      # Default: ollama.
       HIVE_PROVIDER:         ${HIVE_PROVIDER:-ollama}
-      # Ollama server URL. Default: http://localhost:11434.
+      # Ollama server URL.
       HIVE_OLLAMA_URL:       ${HIVE_OLLAMA_URL:-http://localhost:11434}
-      # Alias for HIVE_OLLAMA_URL (used by some subsystems). Default: http://localhost:11434.
+      # Alias for HIVE_OLLAMA_URL (used by some subsystems).
       OLLAMA_HOST:           ${OLLAMA_HOST:-http://localhost:11434}
       # Ollama parallelism. Set to 1 for models that don't support parallel requests.
-      # Default: 1.
       OLLAMA_NUM_PARALLEL:   ${OLLAMA_NUM_PARALLEL:-1}
-      # Ollama request queue depth. Default: 32.
+      # Ollama request queue depth.
       OLLAMA_MAX_QUEUE:      ${OLLAMA_MAX_QUEUE:-32}
       # KV cache quantization type. Options: f16 (default), q4_0, q4_1, q8_0, q5_0, q5_1.
-      # q4_0 saves ~1 GB VRAM on 6 GB cards. Default: unset (f16).
+      # q4_0 saves ~1 GB VRAM on 6 GB cards.
       OLLAMA_KV_CACHE_TYPE:  ${OLLAMA_KV_CACHE_TYPE:-q4_0}
 
       # ── HIVE Core ───────────────────────────────────────────────────────────
-      # Max concurrent ReAct loops. Default: 2.
+      # Max concurrent ReAct loops.
       HIVE_MAX_PARALLEL:     ${HIVE_MAX_PARALLEL:-2}
-      # Python binary for image generation / training scripts. Default: python3.
+      # Python binary for image generation / training scripts.
       HIVE_PYTHON_BIN:       ${HIVE_PYTHON_BIN:-python3}
-      # Rust log level. Options: error, warn, info, debug, trace. Default: info.
+      # Rust log level. Options: error, warn, info, debug, trace.
       RUST_LOG:              ${RUST_LOG:-info}
 
       # ── Sleep Training ───────────────────────────────────────────────────────
-      # Micro-batch size for identity reflection. Default: 2.
+      # Micro-batch size for identity reflection.
       # Set to 1 for smaller models prone to thinking-dominant responses.
       HIVE_SLEEP_BATCH:      ${HIVE_SLEEP_BATCH:-2}
-      # Auto-sleep interval in seconds. Default: 43200 (12 hours).
+      # Auto-sleep interval in seconds.
       HIVE_SLEEP_INTERVAL:   ${HIVE_SLEEP_INTERVAL:-43200}
-      # Micro-training learning rate. Default: 1e-5.
+      # Micro-training learning rate.
       HIVE_SLEEP_LR:         ${HIVE_SLEEP_LR:-1e-5}
 
       # ── Identity & Networking ─────────────────────────────────────────────────
-      # Display name for P2P mesh. Default: anonymous.
+      # Display name for P2P mesh.
       HIVE_USER_NAME:         ${HIVE_USER_NAME:-anonymous}
-      # Enable P2P human mesh (toggles NeuroLease discovery). Default: unset (disabled).
+      # Enable P2P human mesh (toggles NeuroLease discovery).
       HIVE_HUMAN_MESH:       ${HIVE_HUMAN_MESH:-}
-      # P2P mesh listen port. Default: 9877.
+      # P2P mesh listen port.
       HIVE_HUMAN_MESH_PORT:   ${HIVE_HUMAN_MESH_PORT:-9877}
 
       # ── Paths & Ports ────────────────────────────────────────────────────────
-      # Image cache directory. Default: memory/cache/images.
+      # Image cache directory.
       HIVE_CACHE_DIR:        ${HIVE_CACHE_DIR:-memory/cache/images}
-      # File server HTTP port. Default: 8420.
+      # File server HTTP port.
       HIVE_FILE_SERVER_PORT: ${HIVE_FILE_SERVER_PORT:-8420}
 
     # ── Volumes ───────────────────────────────────────────────────────────────
