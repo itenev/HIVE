@@ -331,12 +331,14 @@ the container's volumes, not your host machine.
 ## Troubleshooting
 
 **Container exits immediately:** Check `docker compose logs hive`. Common causes:
+
 - Missing `DISCORD_TOKEN` in `.env` — the bot token is required even in CLI mode
 - Missing `HIVE_ADMIN_USERS` — at least one admin user ID must be set
 - Missing `HIVE_TARGET_CHANNEL` — the bot needs a target channel ID
 
 **Binary is 415 KB instead of ~49 MB (stale cache):** Docker may be reusing a cached
 stub build. Fix:
+
 ```bash
 docker builder prune -f
 docker compose build
@@ -356,32 +358,3 @@ manually first:
 ```bash
 docker compose run --rm hive ollama pull qwen3:32b
 ```
-
-**Chrome not found for PDF generation (`"Could not auto detect a chrome executable"`):**
-The container installs Google Chrome Stable via direct `.deb` download. The
-`CHROME=/usr/bin/google-chrome-stable` env var tells `headless_chrome` where to
-find it — auto-detection fails inside containers. If you see this warning, verify
-Chrome is installed:
-
-```bash
-docker compose exec hive which google-chrome-stable
-```
-
-**Permission denied / Operation not permitted on startup:**
-If the entrypoint fails with `chown: Operation not permitted` or
-`error: failed switching to "hive": operation not permitted`, the container is
-missing required Linux capabilities. The `cap_drop ALL` in docker-compose.yml
-is intentionally strict — the entrypoint needs these caps to work:
-
-- `CHOWN` — fix ownership of named volumes (root-owned by default)
-- `DAC_OVERRIDE` — execute files owned by the `hive` user
-- `SETUID` / `SETGID` — `gosu` privilege drop from root to `hive`
-
-All four are set in the default docker-compose.yml. If you've customized the
-capabilities, ensure they're included.
-
-**Cloudflare tunnel not connecting:** The tunnel process retries every 30 seconds.
-If it shows "cloudflared not found", verify the binary was installed correctly in
-the Dockerfile. You can also disable the tunnel by setting the file server port
-to a value the tunnel won't be able to bind — or by not starting the file server
-in production (set `HIVE_FILE_SERVER_PORT` to a non-routable value).

@@ -75,7 +75,14 @@ COPY --from=builder /build/target/release/HIVE /app/hive
 COPY --from=builder /build/src /app/src
 
 # Directories that HIVE writes to — owned by the hive user
-RUN mkdir -p /app/data /app/logs /app/memory/core && chown -R hive:hive /app
+RUN mkdir -p /app/data /app/logs \
+        /app/memory/core \
+        /app/memory/cache/tts \
+        /app/memory/cache/vision \
+        /app/memory/teacher \
+        /app/memory/computer_runtime \
+        /app/memory/inbox \
+    && chown -R hive:hive /app
 
 # Ollama stores models here — this will be a named volume
 ENV OLLAMA_MODELS=/ollama-models

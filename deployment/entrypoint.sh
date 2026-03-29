@@ -50,10 +50,16 @@ ollama run "$MODEL" "hi" --verbose 2>/dev/null | head -1 || true
 warmup_elapsed=$(($(date +%s) - warmup_start))
 echo "Model warm after ${warmup_elapsed}s"
 
-# ─── Ensure log dir is writable by hive user ──────────────────────────────────
+# ─── Ensure volume dirs are writable by hive user ─────────────────────────────
 # Named volumes are owned by root. HIVE runs as the hive user, so fix perms here.
-mkdir -p /app/logs /app/data /app/memory/core
-chown -R hive:hive /app/logs /app/data /app/memory/core
+mkdir -p /app/logs /app/data \
+    /app/memory/core \
+    /app/memory/cache/tts \
+    /app/memory/cache/vision \
+    /app/memory/teacher \
+    /app/memory/computer_runtime \
+    /app/memory/inbox
+chown -R hive:hive /app/logs /app/data /app/memory
 
 echo "Booting Apis..."
 cd /app

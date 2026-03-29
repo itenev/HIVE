@@ -29,6 +29,8 @@ services:
       # HIVE memory / SQLite / logs persist
       - hive-data:/app/data
       - hive-logs:/app/logs
+      # Agent memory store — working memory, timeline, synaptic graph, etc.
+      - hive-memory:/app/memory
 
     # ── Network ───────────────────────────────────────────────────────────────
     networks:
@@ -84,6 +86,8 @@ volumes:
   hive-data:
     driver: local
   hive-logs:
+    driver: local
+  hive-memory:
     driver: local
 
 # ── Network: internet-capable but LAN-isolated ────────────────────────────────
